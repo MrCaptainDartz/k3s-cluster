@@ -1,0 +1,115 @@
+---
+# ============================================================
+# K3s — Core Configuration
+# ============================================================
+
+k3s_api_port: "6443"
+
+# K3s version channel or specific version (e.g., "stable", "v1.31.2+k3s1")
+k3s_release_version: stable
+
+# Use embedded etcd as the datastore (recommended for 3 control planes)
+k3s_etcd_datastore: true
+
+# Enable privilege escalation for K3s installation
+k3s_become: true
+
+# Address used by nodes to join the cluster (set to kube-vip VIP)
+k3s_registration_address: "{{ k3s_vip }}"
+
+# ============================================================
+# K3s — Server (Control Plane) Configuration
+# ============================================================
+
+# Components to disable in K3s
+# - servicelb: replaced by MetalLB
+# - traefik: install your own Ingress Controller via Helm for more control
+k3s_disabled_components:
+  - servicelb
+  - traefik
+  - local-storage
+
+k3s_server:
+  disable: "{{ k3s_disabled_components }}"
+  tls-san:
+    - "{{ k3s_vip }}"
+  disable-cloud-controller: true
+  write-kubeconfig-mode: "0644"
+  flannel-backend: "host-gw"
+
+# ============================================================
+# kube-vip — Control Plane Virtual IP
+# ============================================================
+
+# Virtual IP address for the K3s API server (must be free on the network)
+k3s_vip: "192.168.1.10"
+
+# Network interface on the nodes where the VIP will be announced (ARP mode)
+k3s_vip_interface: "{{ ansible_default_ipv4.interface }}"
+
+# kube-vip container image and version
+kube_vip_image: "ghcr.io/kube-vip/kube-vip"
+kube_vip_version: "v1.1.1"
+
+# ============================================================
+# Ceph CSI
+# ============================================================
+
+ceph_sc_rbd_name: "ceph-rbd"
+ceph_sc_cephfs_name: "ceph-cephfs"
+
+ceph_csi_version: "3.16.2"
+
+# Cluster name (used as metadata tag by Ceph CSI)
+ceph_csi_clustername: "k3s-prod"
+
+# Ceph Cluster FSID
+ceph_fsid: "YOUR-CEPH-FSID-HERE"
+
+# Ceph user (e.g., admin or kubernetes)
+ceph_client_id: "admin"
+
+# Ceph user secret key (e.g., client.admin or client.kubernetes)
+ceph_client_key: "YOUR-CEPH-ADMIN-KEYRING-HERE"
+
+# Ceph monitor IPs
+ceph_monitors:
+  - "192.168.1.200"
+  - "192.168.1.201"
+  - "192.168.1.202"
+
+# Names of resources
+ceph_rbd_pool: "pool1_ssd"
+cephfs_fs_name: "cephfs1_ssd"
+
+# ============================================================
+# MetalLB — LoadBalancer
+# ============================================================
+
+# MetalLB version to install
+metallb_version: "v0.15.3"
+
+# IP range for MetalLB to allocate to LoadBalancer services
+# Must be on the same L2 network as the nodes and not overlap with DHCP/static IPs
+metallb_ip_range: "192.168.1.150-192.168.1.199"
+
+# Name of the MetalLB IP pool
+metallb_pool_name: "default-pool"
+
+# ============================================================
+# K3s — Auto-deployed Manifests
+# ============================================================
+
+# Manifests downloaded from URLs and placed in /var/lib/rancher/k3s/server/manifests/
+k3s_server_manifests_urls:
+  - url: "https://raw.githubusercontent.com/metallb/metallb/{{ metallb_version }}/config/manifests/metallb-native.yaml"
+    filename: 03-metallb-native.yaml
+
+# Manifests rendered from Jinja2 templates and placed in /var/lib/rancher/k3s/server/manifests/
+k3s_server_manifests_templates:
+  - 01-kube-vip-rbac.yml.j2
+  - 02-kube-vip-daemonset.yml.j2
+  - 04-metallb-config.yml.j2
+  - 05-ceph-secrets.yml.j2
+  - 06-ceph-storageclasses.yml.j2
+  - 07-ceph-csi-helmcharts.yml.j2

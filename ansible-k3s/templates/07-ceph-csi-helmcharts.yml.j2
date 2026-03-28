@@ -1,0 +1,54 @@
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: ceph-csi-rbd
+  namespace: kube-system
+spec:
+  chart: ceph-csi-rbd
+  repo: https://ceph.github.io/csi-charts
+  version: "{{ ceph_csi_version }}"
+  targetNamespace: ceph-csi
+  createNamespace: false
+  valuesContent: |-
+    csiConfig:
+      - clusterID: "{{ ceph_fsid }}"
+        monitors:
+{% for mon in ceph_monitors %}
+          - "{{ mon }}"
+{% endfor %}
+    provisioner:
+      clustername: "{{ ceph_csi_clustername }}"
+    plugin:
+      clustername: "{{ ceph_csi_clustername }}"
+    storageClass:
+      create: false
+    secret:
+      create: false
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: ceph-csi-cephfs
+  namespace: kube-system
+spec:
+  chart: ceph-csi-cephfs
+  repo: https://ceph.github.io/csi-charts
+  version: "{{ ceph_csi_version }}"
+  targetNamespace: ceph-csi
+  createNamespace: false
+  valuesContent: |-
+    csiConfig:
+      - clusterID: "{{ ceph_fsid }}"
+        monitors:
+{% for mon in ceph_monitors %}
+          - "{{ mon }}"
+{% endfor %}
+    provisioner:
+      clustername: "{{ ceph_csi_clustername }}"
+    plugin:
+      clustername: "{{ ceph_csi_clustername }}"
+    storageClass:
+      create: false
+    secret:
+      create: false

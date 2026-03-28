@@ -1,0 +1,39 @@
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: "{{ ceph_sc_rbd_name }}"
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: rbd.csi.ceph.com
+parameters:
+  clusterID: "{{ ceph_fsid }}"
+  pool: "{{ ceph_rbd_pool }}"
+  imageFeatures: layering
+  csi.storage.k8s.io/provisioner-secret-name: csi-rbd-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: ceph-csi
+  csi.storage.k8s.io/controller-expand-secret-name: csi-rbd-secret
+  csi.storage.k8s.io/controller-expand-secret-namespace: ceph-csi
+  csi.storage.k8s.io/node-stage-secret-name: csi-rbd-secret
+  csi.storage.k8s.io/node-stage-secret-namespace: ceph-csi
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+mountOptions:
+  - discard
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: "{{ ceph_sc_cephfs_name }}"
+provisioner: cephfs.csi.ceph.com
+parameters:
+  clusterID: "{{ ceph_fsid }}"
+  fsName: "{{ cephfs_fs_name }}"
+  csi.storage.k8s.io/provisioner-secret-name: csi-cephfs-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: ceph-csi
+  csi.storage.k8s.io/controller-expand-secret-name: csi-cephfs-secret
+  csi.storage.k8s.io/controller-expand-secret-namespace: ceph-csi
+  csi.storage.k8s.io/node-stage-secret-name: csi-cephfs-secret
+  csi.storage.k8s.io/node-stage-secret-namespace: ceph-csi
+reclaimPolicy: Delete
+allowVolumeExpansion: true
