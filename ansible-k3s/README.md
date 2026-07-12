@@ -253,6 +253,8 @@ No policies are applied by default, so the pod network is flat: every pod can re
 | `ceph-csi-operator-system` | deny all ingress  | The CSI driver exposes no network endpoints to pods; deny inbound as defense-in-depth (this namespace holds the Ceph credentials Secret). |
 | `metallb-system`           | deny all ingress  | MetalLB speakers announce via ARP/L2 and do not need inbound from workloads.                      |
 
+This is the **cluster baseline** (system + quarantine namespaces): deny ingress, egress left open. **Application namespaces** use a stricter, state-of-the-art pattern — deny-all (ingress + egress) + explicit allows — applied per namespace; see [Securing a new namespace (step by step)](#securing-a-new-namespace-step-by-step).
+
 What is **not** affected:
 
 - **DNS** — pods still egress to `kube-dns` in `kube-system`, which has no ingress deny.
@@ -263,64 +265,135 @@ What is **not** affected:
 
 > **North-south exposure is blocked by the `default` deny.** Any pod in `default` that is the backend of a `LoadBalancer`, `NodePort`, or `Ingress` Service will be **unreachable** until you add an allow policy. With MetalLB and the default `externalTrafficPolicy: Cluster`, kube-proxy SNATs the source to a node IP; with `externalTrafficPolicy: Local` the original client IP is preserved — in both cases the source is not in the allow-list, so the traffic is dropped. Same story for an ingress controller reaching services in `default`.
 
-### Adding an application
+### Securing a new namespace (step by step)
 
-The baseline denies all ingress in `default`. To make an app reachable, add a `NetworkPolicy` that allows only the sources you trust, then `kubectl apply` it:
+A freshly created namespace has **no NetworkPolicy**, so the pod network is flat — every pod can reach every pod, across all namespaces. The state-of-the-art baseline is: **close everything, then re-open only what you need, in this order.** One namespace per application.
 
-```yaml
-# Example: allow ingress to pods in the `default` namespace.
-# Narrow podSelector to your app's labels (e.g. {app: myapp}) to avoid opening the whole namespace.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-app-ingress
-  namespace: default
-spec:
-  podSelector: {}
-  policyTypes: [Ingress]
-  ingress:
-    # 1) From an ingress controller (Layer 7 — e.g. ingress-nginx, Traefik).
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: ingress-nginx   # adapt to your controller's namespace
-    # 2) From a LoadBalancer/NodePort Service (MetalLB). Traffic is SNAT'd to a
-    #    node IP, so allow the node/L2 subnet. Replace with your K3s nodes' subnet.
-    - from:
-        - ipBlock:
-            cidr: 192.168.1.0/24          # adapt to your subnet (matches the example addressing)
-    # 3) (Optional) East-west: from pods in another namespace.
-    # - from:
-    #     - namespaceSelector:
-    #         matchLabels:
-    #           kubernetes.io/metadata.name: my-other-ns
-```
-
-Notes:
-
-- Narrow `podSelector` to your app's labels (e.g. `app: myapp`) so you only open that app, not the whole namespace.
-- For `LoadBalancer` Services that must preserve the real client IP, set `externalTrafficPolicy: Local` on the Service and allow the **client CIDR** instead of the node subnet.
-- Egress stays open by design — your app can still reach DNS, the API server, Ceph, etc. without any extra policy.
-
-### Creating a new namespace
-
-To keep the "deny by default, allow on purpose" model consistent, apply a `default-deny-ingress` to every new namespace, then add allow policies exactly as above:
+#### Step 1 — Create the namespace
 
 ```bash
-kubectl create namespace my-new-namespace
-kubectl apply -f - <<'EOF'
+kubectl create namespace my-app
+```
+
+#### Step 2 — Deny all (close the namespace)
+
+Apply `default-deny-all`. From this point **no traffic enters or leaves** any pod in `my-app` — neither ingress nor egress, not even from other pods in the same namespace.
+
+```yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny-ingress
-  namespace: my-new-namespace
+  name: default-deny-all
+  namespace: my-app
 spec:
   podSelector: {}
-  policyTypes: [Ingress]
-EOF
+  policyTypes: [Ingress, Egress]
 ```
 
-Then follow the **Adding an application** recipe, changing `namespace:` to your new namespace.
+#### Step 3 — Allow traffic within the namespace
+
+Re-allow ingress and egress between pods of `my-app` (the app ↔ its database, sidecars, etc.).
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-same-namespace
+  namespace: my-app
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}     # pods in THIS namespace only — a podSelector
+                              # without a namespaceSelector is scoped to my-app.
+                              # (namespaceSelector: {} would mean ALL namespaces!)
+  egress:
+    - to:
+        - podSelector: {}     # same: pods in THIS namespace only
+```
+
+#### Step 4 — Allow DNS
+
+Mandatory: with egress denied (Step 2), pods can no longer resolve names, so re-allow egress to CoreDNS (`kube-dns` in `kube-system`, UDP/TCP 53).
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: my-app
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+```
+
+**Steps 1–4 are the baseline**: the namespace is isolated, its pods talk to each other, and DNS works. Steps 5 and 6 are only needed if the app is exposed, or reaches outside.
+
+> Tip: apply Steps 1–4 in one shot with `kubectl apply -f -` and the three documents separated by `---`.
+
+#### Step 5 — (only if the app must be reached from outside) Allow ingress
+
+> **Yes, you still need this with MetalLB.** MetalLB routes external traffic to your pods, but it does **not** bypass NetworkPolicy. The packet reaches the backend pod with its source rewritten — SNAT'd to a node IP with `externalTrafficPolicy: Cluster`, or the real client IP with `externalTrafficPolicy: Local` — and in both cases that source is not in the allow-list, so `default-deny-all` drops it. Allow it explicitly.
+
+For a `LoadBalancer`/`NodePort` Service (MetalLB):
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-lb-ingress
+  namespace: my-app
+spec:
+  podSelector:
+    matchLabels:
+      app: my-app                      # narrow to your app's pods
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 192.168.1.0/24       # your node/L2 subnet (SNAT'd source); adapt
+```
+
+For an **ingress controller** (Layer 7) instead of a raw LoadBalancer, replace the `ipBlock` with a `namespaceSelector` on the controller's namespace, e.g. `kubernetes.io/metadata.name: ingress-nginx`. To preserve the real client IP on a `LoadBalancer`, set `externalTrafficPolicy: Local` on the Service and allow the **client CIDR** instead of the node subnet.
+
+#### Step 6 — (only if the app must reach outside) Allow egress
+
+With egress denied by `default-deny-all`, the app cannot reach the internet, the API server, or another namespace's services until you allow it. Example — internet egress for an app that calls external APIs:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-internet-egress
+  namespace: my-app
+spec:
+  podSelector:
+    matchLabels:
+      app: my-app
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0            # restrict to the destinations/ports you actually need
+```
+
+Other egress examples to adapt: allow TCP `6443` to the API server (VIP/nodes) for controllers that watch resources; allow TCP `3300`/`6789` to the monitor IPs for **direct** Ceph clients.
+
+> Apps that consume Ceph **via PVCs** (RBD/CephFS) do **not** need egress to the monitors: the CSI node plugins run in `hostNetwork` and handle the mount from the node, outside NetworkPolicy. Only direct Ceph clients (librados, an S3 gateway, a CephFS client library) need a Ceph-egress allow.
 
 > Put these per-namespace / per-app policies in your own Git repo or a K8s manifest directory — they are application-specific and do **not** belong in `templates/` (which holds the cluster baseline only).
 
