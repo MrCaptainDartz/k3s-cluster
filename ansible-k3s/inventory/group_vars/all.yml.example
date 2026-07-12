@@ -49,7 +49,7 @@ k3s_vip_interface: "{{ ansible_default_ipv4.interface }}"
 
 # kube-vip container image and version
 kube_vip_image: "ghcr.io/kube-vip/kube-vip"
-kube_vip_version: "v1.1.1"
+kube_vip_version: "v1.2.1"
 
 # ============================================================
 # Ceph CSI
@@ -58,13 +58,7 @@ kube_vip_version: "v1.1.1"
 ceph_sc_rbd_name: "ceph-rbd"
 ceph_sc_cephfs_name: "ceph-cephfs"
 
-ceph_csi_version: "3.16.2"
-
-# Cluster name (used as metadata tag by Ceph CSI)
-ceph_csi_clustername: "k3s-prod"
-
-# Ceph Cluster FSID
-ceph_fsid: "YOUR-CEPH-FSID-HERE"
+ceph_csi_operator_version: "v1.0.4"
 
 # Ceph user (e.g., admin or kubernetes)
 ceph_client_id: "admin"
@@ -104,6 +98,12 @@ metallb_pool_name: "default-pool"
 k3s_server_manifests_urls:
   - url: "https://raw.githubusercontent.com/metallb/metallb/{{ metallb_version }}/config/manifests/metallb-native.yaml"
     filename: 03-metallb-native.yaml
+  - url: "https://raw.githubusercontent.com/ceph/ceph-csi-operator/{{ ceph_csi_operator_version }}/deploy/multifile/crd.yaml"
+    filename: 07-ceph-csi-operator-crd.yaml
+  - url: "https://raw.githubusercontent.com/ceph/ceph-csi-operator/{{ ceph_csi_operator_version }}/deploy/multifile/csi-rbac.yaml"
+    filename: 08-ceph-csi-operator-rbac.yaml
+  - url: "https://raw.githubusercontent.com/ceph/ceph-csi-operator/{{ ceph_csi_operator_version }}/deploy/multifile/operator.yaml"
+    filename: 09-ceph-csi-operator.yaml
 
 # Manifests rendered from Jinja2 templates and placed in /var/lib/rancher/k3s/server/manifests/
 k3s_server_manifests_templates:
@@ -112,4 +112,4 @@ k3s_server_manifests_templates:
   - 04-metallb-config.yml.j2
   - 05-ceph-secrets.yml.j2
   - 06-ceph-storageclasses.yml.j2
-  - 07-ceph-csi-helmcharts.yml.j2
+  - 10-ceph-csi-operator-config.yml.j2

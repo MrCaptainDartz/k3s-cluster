@@ -1,0 +1,32 @@
+---
+apiVersion: csi.ceph.io/v1
+kind: Driver
+metadata:
+  name: rbd.csi.ceph.com
+  namespace: ceph-csi-operator-system
+---
+apiVersion: csi.ceph.io/v1
+kind: Driver
+metadata:
+  name: cephfs.csi.ceph.com
+  namespace: ceph-csi-operator-system
+---
+apiVersion: csi.ceph.io/v1
+kind: CephConnection
+metadata:
+  name: ceph-connection
+  namespace: ceph-csi-operator-system
+spec:
+  monitors:
+{% for mon in ceph_monitors %}
+    - "{{ mon }}"
+{% endfor %}
+---
+apiVersion: csi.ceph.io/v1
+kind: ClientProfile
+metadata:
+  name: storage
+  namespace: ceph-csi-operator-system
+spec:
+  cephConnectionRef:
+    name: ceph-connection

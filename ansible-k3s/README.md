@@ -52,7 +52,8 @@ Here are some important variables based on the provided examples:
 | `k3s_vip`             | `192.168.1.10`                         | The target IP for kube-vip. This IP must be available on the network.  |
 | `k3s_vip_interface`   | `{{ ansible_default_ipv4.interface }}` | On which network interface to share the VIP.                           |
 | `metallb_ip_range`    | `192.168.1.150-192.168.1.199`          | The IP range dynamically assigned by MetalLB to your applications.     |
-| `ceph_fsid`           | `YOUR-CEPH-FSID-HERE`                  | The unique identification UUID of your Proxmox/Ceph cluster.           |
+| `ceph_csi_operator_version` | `v1.0.4`                         | The [ceph-csi-operator](https://github.com/ceph/ceph-csi-operator) release deployed (CRDs, RBAC and operator manifests are pulled from this tag). |
+| `ceph_client_id`      | `admin`                                | The Ceph user used by the CSI driver to authenticate storage requests. |
 | `ceph_client_key`     | `YOUR-CEPH-KEYRING...`                 | The secret key that allows K3s to authenticate storage requests.       |
 | `ceph_monitors`       | `['192.168.1.200', ...]`               | The IPs of the available Ceph monitors on the network.                 |
 
@@ -127,7 +128,7 @@ ansible-k3s/
     ├── 04-metallb-config.yml.j2
     ├── 05-ceph-secrets.yml.j2
     ├── 06-ceph-storageclasses.yml.j2
-    └── 07-ceph-csi-helmcharts.yml.j2
+    └── 10-ceph-csi-operator-config.yml.j2
 ```
 
 ## Verification
@@ -151,6 +152,6 @@ kubectl get pods -n kube-system -l app.kubernetes.io/name=kube-vip-ds
 kubectl get pods -n metallb-system
 
 # Verify the Ceph storage configuration
-kubectl get pods -n ceph-csi
+kubectl get pods -n ceph-csi-operator-system
 kubectl get storageclass
 ```
