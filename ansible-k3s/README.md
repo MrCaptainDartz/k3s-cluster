@@ -130,6 +130,19 @@ Here are some important variables based on the provided examples:
 | `ceph_sc_rbd_name`    | `ceph-rbd`                             | Name of the RBD StorageClass (the `storageClassName` to reference in a PVC). |
 | `ceph_sc_cephfs_name` | `ceph-cephfs`                          | Name of the CephFS StorageClass (the `storageClassName` to reference in a PVC). |
 
+#### Tested component versions
+
+The versions below are the ones currently pinned in `inventory/group_vars/all.yml` (the source of truth) and mirrored in `all.yml.example`. Keep them in sync when you bump a component, and re-test the cluster after any change.
+
+| Component               | Variable                  | Version  |
+| ----------------------- | ------------------------- | -------- |
+| K3s (channel)           | `k3s_release_version`     | `stable` |
+| kube-vip                | `kube_vip_version`        | `v1.2.1` |
+| MetalLB                 | `metallb_version`         | `v0.16.1`|
+| Ceph CSI Operator       | `ceph_csi_operator_version` | `v1.0.4`|
+
+> K3s follows the `stable` channel, which is a moving target. For stricter reproducibility you may pin a specific release (e.g. `v1.31.2+k3s1`) instead.
+
 ### 3. Run the deployment
 
 Simply run the playbook:

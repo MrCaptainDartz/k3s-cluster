@@ -84,7 +84,7 @@ cephfs_subvolumegroup: "csi"
 # ============================================================
 
 # MetalLB version to install
-metallb_version: "v0.15.3"
+metallb_version: "v0.16.1"
 
 # IP range for MetalLB to allocate to LoadBalancer services
 # Must be on the same L2 network as the nodes and not overlap with DHCP/static IPs

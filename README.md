@@ -2,7 +2,7 @@
 
 This repository provides a complete solution for deploying a **Hyperconverged Infrastructure (HCI)** at home on a Proxmox VE cluster.
 
-From initial VM provisioning to a production-ready, highly available K3s cluster with persistent storage, this project automates the entire stack using modern Infrastructure-as-Code (IaC) principles with **OpenTofu** and **Ansible**.
+From initial VM provisioning to a highly available K3s cluster with persistent storage, this project automates the entire stack using modern Infrastructure-as-Code (IaC) principles with **OpenTofu** and **Ansible**.
 
 ---
 
@@ -94,7 +94,7 @@ Before you begin, ensure your environment meets the following requirements:
 
 ## 🔍 Why this project?
 
-Setting up a robust Kubernetes cluster in a homelab often involves repetitive manual steps (creating VMs, installing Docker/K3s, configuring networking). This project treats your homelab like a **Production Environment**, ensuring that your entire infrastructure is:
+Setting up a robust Kubernetes cluster in a homelab often involves repetitive manual steps (creating VMs, installing Docker/K3s, configuring networking). This project brings cloud-native IaC practices to your homelab, ensuring that your entire infrastructure is:
 
 - **Reproducible**: Rebuilding your cluster takes minutes, not hours.
 - **Version Controlled**: Any changes to your infra or K8s config are tracked in Git.
