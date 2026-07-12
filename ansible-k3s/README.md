@@ -117,6 +117,8 @@ Here are some important variables based on the provided examples:
 | Variable              | Example                                | Explanation                                                            |
 | --------------------- | -------------------------------------- | ---------------------------------------------------------------------- |
 | `k3s_release_version` | `stable`                               | K3s version to deploy (can be a specific release like `v1.31.2+k3s1`). |
+| `k3s_etcd_snapshot_cron` | `0 */6 * * *`                        | Cron expression for scheduled etcd snapshots (embedded etcd only).   |
+| `k3s_etcd_snapshot_retention` | `28`                         | Snapshots retained per control-plane node (≈ 7 days at 6 h intervals). |
 | `k3s_vip`             | `192.168.1.10`                         | The target IP for kube-vip. This IP must be available on the network.  |
 | `k3s_vip_interface`   | `{{ ansible_default_ipv4.interface }}` | On which network interface to share the VIP.                           |
 | `metallb_ip_range`    | `192.168.1.150-192.168.1.199`          | The IP range dynamically assigned by MetalLB to your applications.     |
@@ -214,8 +216,113 @@ ansible-k3s/
     ├── 04-metallb-config.yml.j2
     ├── 05-ceph-secrets.yml.j2
     ├── 06-ceph-storageclasses.yml.j2
-    └── 10-ceph-csi-operator-config.yml.j2
+    ├── 10-ceph-csi-operator-config.yml.j2
+    └── 11-network-policies.yml.j2        # Baseline NetworkPolicies (kube-router netpol)
 ```
+
+## Backups (etcd snapshots)
+
+K3s (with the embedded etcd datastore) takes automatic snapshots on **each control-plane node** on the schedule defined by `k3s_etcd_snapshot_cron` (default: every 6 hours) and keeps `k3s_etcd_snapshot_retention` of them (default: 28, ≈ 7 days at 6 h intervals). Snapshots are written to `/var/lib/rancher/k3s/server/db/snapshots/` on every server.
+
+These settings are injected through the `k3s_server` config (`etcd-snapshot-schedule-cron` / `etcd-snapshot-retention`).
+
+```bash
+# List snapshots on a control-plane node
+sudo k3s etcd-snapshot ls
+
+# Trigger an ad-hoc snapshot
+sudo k3s etcd-snapshot save
+
+# Restore from a snapshot — requires stopping k3s on all servers first.
+# See the K3s docs for the full procedure:
+#   https://docs.k3s.io/datastore/backup-restore
+sudo k3s etcd-snapshot snapshot ...
+```
+
+> Snapshots stay on the node by default. For off-node / off-site backup, point K3s at an S3 bucket (`etcd-s3-endpoint`, `etcd-s3-bucket`, …) or sync the snapshot directory elsewhere — out of scope for this homelab baseline.
+
+## Network policies
+
+K3s enforces Kubernetes `NetworkPolicy` resources **out of the box** via its embedded **kube-router network-policy controller**, which is active by default alongside the Flannel CNI. Disable it with `--disable-network-policy` only if you install a CNI that brings its own policy engine (Calico, Cilium, …).
+
+No policies are applied by default, so the pod network is flat: every pod can reach every pod, across all namespaces. The auto-deployed manifest `11-network-policies.yml.j2` installs a conservative starter baseline that **denies all ingress** in three namespaces, while leaving egress open (so DNS resolution and normal outbound traffic keep working):
+
+| Namespace                  | Policy            | Why                                                                                                 |
+| -------------------------- | ----------------- | --------------------------------------------------------------------------------------------------- |
+| `default`                  | deny all ingress  | Isolates workloads deployed in the default namespace; they can still initiate connections (DNS, egress) but cannot be reached from other pods/namespaces. |
+| `ceph-csi-operator-system` | deny all ingress  | The CSI driver exposes no network endpoints to pods; deny inbound as defense-in-depth (this namespace holds the Ceph credentials Secret). |
+| `metallb-system`           | deny all ingress  | MetalLB speakers announce via ARP/L2 and do not need inbound from workloads.                      |
+
+What is **not** affected:
+
+- **DNS** — pods still egress to `kube-dns` in `kube-system`, which has no ingress deny.
+- **Probes** — kubelet liveness/readiness probes (node-to-pod traffic) are exempt from NetworkPolicy.
+- **Egress** — all pods can still initiate outbound connections.
+
+> **`hostNetwork` pods are not enforced.** kube-router (K3s's policy engine) intentionally skips pods running with `hostNetwork: true`, as does the upstream Kubernetes model. Concretely the **Ceph CSI node plugins** and the **MetalLB speakers** both run in `hostNetwork`, so the policies on `ceph-csi-operator-system` and `metallb-system` only really apply to the operator/controller pods (which is what we want to protect — they hold the Ceph Secret / manage allocations). Don't rely on these policies to isolate the speakers/plugins themselves: they share the node's network namespace.
+
+> **North-south exposure is blocked by the `default` deny.** Any pod in `default` that is the backend of a `LoadBalancer`, `NodePort`, or `Ingress` Service will be **unreachable** until you add an allow policy. With MetalLB and the default `externalTrafficPolicy: Cluster`, kube-proxy SNATs the source to a node IP; with `externalTrafficPolicy: Local` the original client IP is preserved — in both cases the source is not in the allow-list, so the traffic is dropped. Same story for an ingress controller reaching services in `default`.
+
+### Adding an application
+
+The baseline denies all ingress in `default`. To make an app reachable, add a `NetworkPolicy` that allows only the sources you trust, then `kubectl apply` it:
+
+```yaml
+# Example: allow ingress to pods in the `default` namespace.
+# Narrow podSelector to your app's labels (e.g. {app: myapp}) to avoid opening the whole namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-ingress
+  namespace: default
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    # 1) From an ingress controller (Layer 7 — e.g. ingress-nginx, Traefik).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx   # adapt to your controller's namespace
+    # 2) From a LoadBalancer/NodePort Service (MetalLB). Traffic is SNAT'd to a
+    #    node IP, so allow the node/L2 subnet. Replace with your K3s nodes' subnet.
+    - from:
+        - ipBlock:
+            cidr: 192.168.1.0/24          # adapt to your subnet (matches the example addressing)
+    # 3) (Optional) East-west: from pods in another namespace.
+    # - from:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           kubernetes.io/metadata.name: my-other-ns
+```
+
+Notes:
+
+- Narrow `podSelector` to your app's labels (e.g. `app: myapp`) so you only open that app, not the whole namespace.
+- For `LoadBalancer` Services that must preserve the real client IP, set `externalTrafficPolicy: Local` on the Service and allow the **client CIDR** instead of the node subnet.
+- Egress stays open by design — your app can still reach DNS, the API server, Ceph, etc. without any extra policy.
+
+### Creating a new namespace
+
+To keep the "deny by default, allow on purpose" model consistent, apply a `default-deny-ingress` to every new namespace, then add allow policies exactly as above:
+
+```bash
+kubectl create namespace my-new-namespace
+kubectl apply -f - <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: my-new-namespace
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+EOF
+```
+
+Then follow the **Adding an application** recipe, changing `namespace:` to your new namespace.
+
+> Put these per-namespace / per-app policies in your own Git repo or a K8s manifest directory — they are application-specific and do **not** belong in `templates/` (which holds the cluster baseline only).
 
 ## Verification
 
@@ -242,4 +349,10 @@ kubectl get pods -n ceph-csi-operator-system
 kubectl get cephconnection,clientprofile,driver -n ceph-csi-operator-system
 kubectl get csidriver
 kubectl get storageclass
+
+# Verify the baseline NetworkPolicies
+kubectl get networkpolicy -A
+
+# Verify the etcd snapshot schedule (run on a control-plane node)
+sudo k3s etcd-snapshot ls
 ```

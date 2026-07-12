@@ -11,6 +11,13 @@ k3s_release_version: stable
 # Use embedded etcd as the datastore (recommended for 3 control planes)
 k3s_etcd_datastore: true
 
+# Scheduled etcd snapshots (embedded etcd only). Snapshots run on every
+# control-plane node and are stored under
+# /var/lib/rancher/k3s/server/db/snapshots/, pruned to k3s_etcd_snapshot_retention.
+# Restore with: `k3s etcd-snapshot ...` (see README).
+k3s_etcd_snapshot_cron: "0 */6 * * *"   # every 6 hours
+k3s_etcd_snapshot_retention: "28"       # ~7 days at 6h intervals
+
 # Enable privilege escalation for K3s installation
 k3s_become: true
 
@@ -36,6 +43,8 @@ k3s_server:
   disable-cloud-controller: true
   write-kubeconfig-mode: "0644"
   flannel-backend: "host-gw"
+  etcd-snapshot-schedule-cron: "{{ k3s_etcd_snapshot_cron }}"
+  etcd-snapshot-retention: "{{ k3s_etcd_snapshot_retention }}"
 
 # ============================================================
 # kube-vip — Control Plane Virtual IP
@@ -116,3 +125,4 @@ k3s_server_manifests_templates:
   - 05-ceph-secrets.yml.j2
   - 06-ceph-storageclasses.yml.j2
   - 10-ceph-csi-operator-config.yml.j2
+  - 11-network-policies.yml.j2

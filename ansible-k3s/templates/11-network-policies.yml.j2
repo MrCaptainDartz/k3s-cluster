@@ -1,0 +1,59 @@
+---
+# ============================================================
+# Baseline NetworkPolicies
+# ============================================================
+# K3s enforces NetworkPolicy out of the box via its embedded kube-router
+# network-policy controller (active by default alongside the Flannel CNI).
+# No policies are shipped by default, so the pod network is otherwise flat:
+# every pod can reach every pod, across all namespaces.
+#
+# This manifest installs a conservative starter baseline: deny ALL ingress
+# in three namespaces, while leaving egress open — so DNS resolution and
+# normal outbound traffic keep working, but unsolicited inbound to these
+# workloads is blocked (limits lateral movement / direct pod access).
+#
+# What is NOT affected:
+#   - DNS:        pods still egress to kube-dns in kube-system (no deny there).
+#   - Probes:     kubelet liveness/readiness probes (node-to-pod) are exempt.
+#   - Egress:     all pods can still initiate outbound connections.
+#
+# Caveat: once you install an ingress controller (in its own namespace), it
+# will be blocked from reaching services in `default`. Add an ingress-allow
+# policy at that point (see the ansible-k3s README for an example).
+# ============================================================
+
+# 1. default namespace — isolate workloads deployed here by default.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: default
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# 2. ceph-csi-operator-system — the CSI driver exposes no network endpoints
+#    to other pods; deny inbound as defense-in-depth. This namespace holds
+#    the Ceph credentials Secret (csi-rbd-secret / csi-cephfs-secret).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: ceph-csi-operator-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# 3. metallb-system — speakers announce via ARP/L2 and do not need inbound
+#    from workloads.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: metallb-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
