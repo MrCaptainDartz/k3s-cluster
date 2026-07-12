@@ -76,6 +76,9 @@ ceph_monitors:
 ceph_rbd_pool: "pool1_ssd"
 cephfs_fs_name: "cephfs1_ssd"
 
+# CephFS subvolume group used by the CSI driver (must exist in Ceph)
+cephfs_subvolumegroup: "csi"
+
 # ============================================================
 # MetalLB — LoadBalancer
 # ============================================================
