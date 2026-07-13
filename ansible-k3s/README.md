@@ -397,25 +397,27 @@ sudo k3s etcd-snapshot snapshot ...
 
 K3s enforces Kubernetes `NetworkPolicy` resources **out of the box** via its embedded **kube-router network-policy controller**, which is active by default alongside the Flannel CNI. Disable it with `--disable-network-policy` only if you install a CNI that brings its own policy engine (Calico, Cilium, …).
 
-No policies are applied by default, so the pod network is flat: every pod can reach every pod, across all namespaces. The auto-deployed manifest `11-network-policies.yml.j2` installs a conservative starter baseline that **denies all ingress** in three namespaces, while leaving egress open (so DNS resolution and normal outbound traffic keep working):
+No policies are applied by default, so the pod network is flat: every pod can reach every pod, across all namespaces. The auto-deployed manifest `11-network-policies.yml.j2` installs a **zero-trust** cluster baseline: **deny all ingress AND egress** in three namespaces, then re-open only the minimal egress each system component needs. `kube-system` deliberately gets **no policy** (its critical components — CoreDNS, kube-proxy, metrics-server, Traefik, kube-vip — need broad connectivity and run partly `hostNetwork`; locking it down on K3s is risky and out of scope for this baseline).
 
-| Namespace                  | Policy            | Why                                                                                                 |
-| -------------------------- | ----------------- | --------------------------------------------------------------------------------------------------- |
-| `default`                  | deny all ingress  | Isolates workloads deployed in the default namespace; they can still initiate connections (DNS, egress) but cannot be reached from other pods/namespaces. |
-| `ceph-csi-operator-system` | deny all ingress  | The CSI driver exposes no network endpoints to pods; deny inbound as defense-in-depth (this namespace holds the Ceph credentials Secret). |
-| `metallb-system`           | deny all ingress  | MetalLB speakers announce via ARP/L2 and do not need inbound from workloads.                      |
+| Namespace                  | Ingress      | Egress re-opened                                                                                                   | Why                                                                                                        |
+| -------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `default` (strict quarantine) | deny all  | DNS :53 (UDP/TCP) to `kube-dns` only                                                                              | A pod landing in `default` can resolve names but nothing else — cannot be reached, cannot phone home. Deploy real apps in a dedicated namespace, not `default`. |
+| `ceph-csi-operator-system` | deny all     | Ceph `ceph_subnet` on 3300 / 6789 / 6800-7300 (`endPort`), API `node_cidr:6443`, DNS :53                            | The CSI provisioner connects to the Ceph monitors AND the OSDs directly (after fetching the OSD map), so egress targets the whole Ceph subnet. Protects the operator + ctrlplugin (hold the Ceph Secret / drive provisioning). |
+| `metallb-system`           | deny all     | API `node_cidr:6443`, DNS :53                                                                                      | The controller does leader-election + watch via the API server. Speakers run `hostNetwork` (not enforced); the webhook is served to the kube-apiserver (node-origin, exempt — see below). |
+| `kube-system`              | **none**     | —                                                                                                                  | Left open by design (critical components; partly `hostNetwork`). See note above.                           |
 
-This is the **cluster baseline** (system + quarantine namespaces): deny ingress, egress left open. **Application namespaces** use a stricter, state-of-the-art pattern — deny-all (ingress + egress) + explicit allows — applied per namespace; see [Securing a new namespace (step by step)](#securing-a-new-namespace-step-by-step).
+This is the **cluster baseline** (system + quarantine namespaces): deny-all-both + targeted egress. **Application namespaces** use the same deny-all + explicit-allow pattern, applied per namespace; see [Securing a new namespace (step by step)](#securing-a-new-namespace-step-by-step).
 
-What is **not** affected:
+What is **not** affected / **not** enforced:
 
-- **DNS** — pods still egress to `kube-dns` in `kube-system`, which has no ingress deny.
-- **Probes** — kubelet liveness/readiness probes (node-to-pod traffic) are exempt from NetworkPolicy.
-- **Egress** — all pods can still initiate outbound connections.
+- **DNS** — pods in the three guarded namespaces reach `kube-dns` because DNS egress is explicitly re-opened above; `kube-system` itself has no deny, so CoreDNS keeps serving.
+- **Probes** — kubelet liveness/readiness probes (node-to-pod traffic) are exempt from NetworkPolicy; node-originated traffic is not enforced.
+- **Admission webhooks** — the cert-manager and MetalLB validating webhooks are called by the kube-apiserver, which runs as a host process (not a pod). That traffic is node-originated and therefore exempt, so the deny-ingress above does **not** break webhook validation (no separate ingress allow needed for the webhook itself).
+- **`hostNetwork` pods** — kube-router intentionally skips pods running with `hostNetwork: true`, as does the upstream Kubernetes model. The **Ceph CSI node plugins** and the **MetalLB speakers** both run in `hostNetwork`, so the policies on `ceph-csi-operator-system` and `metallb-system` only really apply to the operator/controller/provisioner pods (which is what we want to protect). Don't rely on these policies to isolate the speakers/plugins themselves: they share the node's network namespace.
 
-> **`hostNetwork` pods are not enforced.** kube-router (K3s's policy engine) intentionally skips pods running with `hostNetwork: true`, as does the upstream Kubernetes model. Concretely the **Ceph CSI node plugins** and the **MetalLB speakers** both run in `hostNetwork`, so the policies on `ceph-csi-operator-system` and `metallb-system` only really apply to the operator/controller pods (which is what we want to protect — they hold the Ceph Secret / manage allocations). Don't rely on these policies to isolate the speakers/plugins themselves: they share the node's network namespace.
+> **North-south exposure is blocked by the `default` deny.** Any pod in `default` that is the backend of a `LoadBalancer`, `NodePort`, or `Ingress` Service will be **unreachable** until you add an allow policy. With MetalLB and the default `externalTrafficPolicy: Cluster`, kube-proxy SNATs the source to a node IP; with `externalTrafficPolicy: Local` the original client IP is preserved — in both cases the source is not in the allow-list, so the traffic is dropped. Same story for an ingress controller reaching services in `default`. (`default` being a strict quarantine, you normally deploy apps in a dedicated namespace instead — see the tutorial.)
 
-> **North-south exposure is blocked by the `default` deny.** Any pod in `default` that is the backend of a `LoadBalancer`, `NodePort`, or `Ingress` Service will be **unreachable** until you add an allow policy. With MetalLB and the default `externalTrafficPolicy: Cluster`, kube-proxy SNATs the source to a node IP; with `externalTrafficPolicy: Local` the original client IP is preserved — in both cases the source is not in the allow-list, so the traffic is dropped. Same story for an ingress controller reaching services in `default`.
+> **kube-router limitations** (K3s's policy engine, with Flannel): `endPort` (port ranges) **is supported** — used here for the Ceph OSD range 6800-7300; **FQDN** egress (e.g. `to: example.com`) is **not supported** — that is an API limitation of standard `networking.k8s.io/v1` NetworkPolicy, not kube-router, so use `ipBlock`/CIDR instead; **`hostNetwork` pods** are **not enforced** (see above). Keep these in mind when writing per-namespace policies.
 
 ### Securing a new namespace (step by step)
 
@@ -464,6 +466,71 @@ spec:
     - to:
         - podSelector: {}     # same: pods in THIS namespace only
 ```
+
+> **Step 3 is a coarse allow** — every pod in `my-app` can reach every other pod in `my-app`. That is fine for a single-tier app. For a multi-tier app (frontend → backend → database) prefer **micro-segmentation by label**: narrow each tier's allow to exactly the tiers that may talk to it, instead of opening the whole namespace.
+
+#### Step 3b — (optional) Micro-segmentation by label
+
+Replace the broad `allow-same-namespace` (Step 3) with per-tier least-privilege allows. Label your pods (e.g. `tier: frontend|backend|db`) and chain the allows so each tier admits only its upstream.
+
+```yaml
+# frontend admits only the ingress controller (see Step 5); nothing inside reaches it.
+# backend admits frontend (ingress + egress), reaches db (egress).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-admits-frontend
+  namespace: my-app
+spec:
+  podSelector:
+    matchLabels: { tier: backend }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { tier: frontend }
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# db admits backend only — frontend can never reach the database directly.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-admits-backend
+  namespace: my-app
+spec:
+  podSelector:
+    matchLabels: { tier: db }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { tier: backend }
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# backend egress to db (the only cross-tier outbound it needs; DNS is Step 4).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-egress-to-db
+  namespace: my-app
+spec:
+  podSelector:
+    matchLabels: { tier: backend }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { tier: db }
+      ports:
+        - protocol: TCP
+          port: 5432
+```
+
+A bare `podSelector` inside `from`/`to` (no `namespaceSelector`) is scoped to the **same namespace** as the policy — exactly what micro-segmentation needs. Add a `namespaceSelector: {}` by mistake and it becomes "all namespaces".
 
 #### Step 4 — Allow DNS
 
@@ -548,6 +615,8 @@ spec:
 
 > A `namespaceSelector` and a `podSelector` in the **same** `from` entry are AND-ed: the source pod must be in `kube-system` **and** match the Traefik label. To preserve the real client IP on a `LoadBalancer` (no ingress controller), set `externalTrafficPolicy: Local` on the Service and allow the **client CIDR** instead of the node subnet.
 
+> **Traefik reaches my app — do I need a broad "allow Traefik to talk to everyone" policy?** No, and you can't really write one anyway: NetworkPolicy is **namespace-scoped**, so there is no single cluster-wide "Traefik may reach any pod" object — a policy in `my-app` can only select pods in `my-app`. The narrow per-app allow above (`namespaceSelector: kube-system` + the Traefik `podSelector`, AND-ed, on the exact port) is both the only place to express it and the safer choice: Traefik can reach **only** the pods you label and only on the port you name. A broader allow (e.g. `podSelector: {}` so any pod in `my-app` accepts Traefik) would let Traefik — and therefore any external HTTP client routing through it — touch every pod in the namespace, not just the one you meant to expose. Keep the allow tight to the exposed tier and port.
+
 #### Step 6 — (only if the app must reach outside) Allow egress
 
 With egress denied by `default-deny-all`, the app cannot reach the internet, the API server, or another namespace's services until you allow it. Example — internet egress for an app that calls external APIs:
@@ -572,6 +641,126 @@ spec:
 Other egress examples to adapt: allow TCP `6443` to the API server (VIP/nodes) for controllers that watch resources; allow TCP `3300`/`6789` to the monitor IPs for **direct** Ceph clients.
 
 > Apps that consume Ceph **via PVCs** (RBD/CephFS) do **not** need egress to the monitors: the CSI node plugins run in `hostNetwork` and handle the mount from the node, outside NetworkPolicy. Only direct Ceph clients (librados, an S3 gateway, a CephFS client library) need a Ceph-egress allow.
+
+#### Putting it together — a complete example
+
+A single namespace secured end-to-end: a web app deployed, exposed through the packaged Traefik, with the policy set applied. Adapt the names/labels/ports to your app. Save as `my-app.yaml` and `kubectl apply -f my-app.yaml`.
+
+```yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: my-app
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: my-app
+  labels: { app: my-app }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: my-app } }
+  template:
+    metadata:
+      labels: { app: my-app }     # this label is what the Traefik allow matches
+    spec:
+      containers:
+        - name: web
+          image: nginxinc/nginx-unprivileged
+          ports: [{ containerPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: my-app
+spec:
+  selector: { app: my-app }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+# 1. Close the namespace: no traffic in or out unless explicitly allowed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny-all, namespace: my-app }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# 2. DNS: re-allow egress to kube-dns (mandatory whenever egress is denied).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-dns-egress, namespace: my-app }
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# 3. Let only the packaged Traefik (kube-system) reach the app, on :8080.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-traefik-ingress, namespace: my-app }
+spec:
+  podSelector: { matchLabels: { app: my-app } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { app.kubernetes.io/name: traefik }
+      ports:
+        - { protocol: TCP, port: 8080 }
+---
+# 4. (optional) If the app calls external APIs, allow internet egress on the ports it needs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-internet-egress, namespace: my-app }
+spec:
+  podSelector: { matchLabels: { app: my-app } }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: { cidr: 0.0.0.0/0 }      # narrow to the destinations/ports you actually use
+      ports:
+        - { protocol: TCP, port: 443 }
+```
+
+Then expose it through Traefik with an `Ingress` (the ClusterIssuers from cert-manager give you real TLS once you point `tls.secretName` at a Certificate):
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: my-app
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-staging   # or letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: ["my-app.captaindartz.org"]
+      secretName: my-app-tls
+  rules:
+    - host: my-app.captaindartz.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port: { number: 8080 }
+```
 
 > Put these per-namespace / per-app policies in your own Git repo or a K8s manifest directory — they are application-specific and do **not** belong in `templates/` (which holds the cluster baseline only).
 
@@ -614,8 +803,16 @@ kubectl get pods -n kube-system -l app.kubernetes.io/name=csi-smb-controller   #
 kubectl get csidriver nfs.csi.k8s.io smb.csi.k8s.io
 kubectl get storageclass | grep -E 'nfs-|smb-'                                 # one SC per share
 
-# Verify the baseline NetworkPolicies
+# Verify the baseline NetworkPolicies (zero-trust cluster baseline)
 kubectl get networkpolicy -A
+#   default:                   default-deny-all + allow-dns-egress
+#   metallb-system:            default-deny-all + allow-egress-kubeapi + allow-egress-dns
+#   ceph-csi-operator-system:  default-deny-all + allow-egress-ceph + allow-egress-kubeapi + allow-egress-dns
+#   cert-manager (if enabled): default-deny-all + allow-apiserver-webhook + allow-egress-dns + allow-egress-kubeapi + allow-egress-acme-dnsproviders
+#   kube-system:               (intentionally none)
+# Quick quarantine check — a pod in `default` resolves DNS but CANNOT reach outside:
+kubectl run np-qc --rm -i --restart=Never --image=registry.k8s.io/e2e-test-images/jessie-dind:1.0 -- nslookup kubernetes.default   # resolves (DNS allowed)
+kubectl run np-qc --rm -i --restart=Never --image=registry.k8s.io/e2e-test-images/jessie-dind:1.0 -- wget -T3 -qO- https://1.1.1.1 2>&1 | head   # FAILS (quarantine)
 
 # Verify cert-manager (only if certmanager_enabled)
 kubectl get pods -n cert-manager

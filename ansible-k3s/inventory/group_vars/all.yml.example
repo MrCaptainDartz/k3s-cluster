@@ -88,6 +88,13 @@ ceph_monitors:
   - "192.168.1.201"
   - "192.168.1.202"
 
+# CIDR of the Ceph (storage) network. The CSI provisioner connects to the
+# monitors AND to the OSDs directly (after fetching the OSD map), so the
+# baseline NetworkPolicy (templates/11-network-policies.yml.j2) allows egress
+# to this whole subnet on the Ceph ports (3300 / 6789 / 6800-7300) rather than
+# only to the monitor IPs. Must cover monitors + OSDs + mgrs.
+ceph_subnet: "192.168.1.0/24"
+
 # Names of resources
 ceph_rbd_pool: "pool1_ssd"
 cephfs_fs_name: "cephfs1_ssd"

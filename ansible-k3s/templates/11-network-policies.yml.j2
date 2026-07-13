@@ -1,59 +1,212 @@
 ---
 # ============================================================
-# Baseline NetworkPolicies
+# Baseline NetworkPolicies — cluster zero-trust
 # ============================================================
 # K3s enforces NetworkPolicy out of the box via its embedded kube-router
 # network-policy controller (active by default alongside the Flannel CNI).
 # No policies are shipped by default, so the pod network is otherwise flat:
 # every pod can reach every pod, across all namespaces.
 #
-# This manifest installs a conservative starter baseline: deny ALL ingress
-# in three namespaces, while leaving egress open — so DNS resolution and
-# normal outbound traffic keep working, but unsolicited inbound to these
-# workloads is blocked (limits lateral movement / direct pod access).
+# This manifest installs a ZERO-TRUST cluster baseline: deny ALL ingress AND
+# egress in three namespaces, then re-open only the minimal egress each system
+# component needs. `kube-system` gets NO policy (see below). Application
+# namespaces use the same deny-all + targeted-allow pattern — see the
+# ansible-k3s README "Securing a new namespace" tutorial.
 #
-# What is NOT affected:
-#   - DNS:        pods still egress to kube-dns in kube-system (no deny there).
-#   - Probes:     kubelet liveness/readiness probes (node-to-pod) are exempt.
-#   - Egress:     all pods can still initiate outbound connections.
+# Why deny-all-both here (and not just ingress)? The previous baseline left
+# egress open; zero-trust closes outbound too, so a compromised pod in these
+# namespaces cannot phone home or scan the storage/api networks. Each allow
+# below names exactly what its component legitimately needs.
 #
-# Caveat: once you install an ingress controller (in its own namespace), it
-# will be blocked from reaching services in `default`. Add an ingress-allow
-# policy at that point (see the ansible-k3s README for an example).
+# What is NOT affected / NOT enforced:
+#   - kube-system:  no policy at all. Its critical components (CoreDNS, kube-proxy,
+#                   metrics-server, Traefik, kube-vip) need broad connectivity and
+#                   run partly hostNetwork; locking it down on K3s is risky and
+#                   out of scope. Pods in OTHER namespaces still reach kube-dns
+#                   because DNS egress is explicitly allowed below.
+#   - Probes:       kubelet liveness/readiness probes (node-to-pod) are exempt
+#                   from NetworkPolicy — node-originated traffic is not enforced.
+#   - Admission     webhooks (cert-manager, metallb) are called by the kube-apiserver,
+#                   which runs as a host process (not a pod) — that traffic is also
+#                   node-originated and therefore exempt, so the deny-ingress below
+#                   does NOT break webhook validation.
+#   - hostNetwork:  kube-router does NOT enforce NP on hostNetwork pods. The Ceph
+#                   CSI node plugins and the MetalLB speakers run hostNetwork, so the
+#                   ceph-csi-operator-system / metallb-system policies only apply to
+#                   the operator/controller/provisioner pods (which is what we protect
+#                   — they hold the Ceph Secret / drive provisioning / manage
+#                   allocations), not to the speakers/node plugins themselves.
 # ============================================================
 
-# 1. default namespace — isolate workloads deployed here by default.
+# 1. default — strict quarantine. A pod that lands here can only resolve DNS;
+#    it cannot be reached and cannot reach anything else. Deploy real apps in a
+#    dedicated namespace (see README), not in `default`.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny-ingress
+  name: default-deny-all
   namespace: default
 spec:
   podSelector: {}
   policyTypes:
     - Ingress
+    - Egress
 ---
-# 2. ceph-csi-operator-system — the CSI driver exposes no network endpoints
-#    to other pods; deny inbound as defense-in-depth. This namespace holds
-#    the Ceph credentials Secret (csi-rbd-secret / csi-cephfs-secret).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny-ingress
-  namespace: ceph-csi-operator-system
+  name: allow-dns-egress
+  namespace: default
 spec:
   podSelector: {}
   policyTypes:
-    - Ingress
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
 ---
-# 3. metallb-system — speakers announce via ARP/L2 and do not need inbound
-#    from workloads.
+# 2. metallb-system — deny all, then let the controller reach the API server
+#    (leader election + watch) and DNS. Speakers run hostNetwork (not enforced);
+#    the controller's webhook is served to the kube-apiserver (node-origin,
+#    exempt — see header). Nothing else legitimately reaches MetalLB pods.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny-ingress
+  name: default-deny-all
   namespace: metallb-system
 spec:
   podSelector: {}
   policyTypes:
     - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-kubeapi
+  namespace: metallb-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: {{ node_cidr }}
+      ports:
+        - protocol: TCP
+          port: 6443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+  namespace: metallb-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# 3. ceph-csi-operator-system — deny all, then let the operator + provisioner
+#    (ctrlplugin) reach the Ceph cluster, the API server and DNS. The CSI
+#    provisioner connects to the Ceph monitors AND to the OSDs directly (after
+#    fetching the OSD map), so the allow targets the whole ceph_subnet, not just
+#    the monitor IPs. Ports: mon msgr2 3300, mon msgr1 6789, OSDs/mgrs 6800-7300
+#    (endPort — supported by kube-router). Node plugins run hostNetwork (not
+#    enforced); this protects the operator + ctrlplugin, which hold the Ceph
+#    Secret and drive RBD/CephFS provisioning.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: ceph-csi-operator-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-ceph
+  namespace: ceph-csi-operator-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: {{ ceph_subnet }}
+      ports:
+        - protocol: TCP
+          port: 3300
+        - protocol: TCP
+          port: 6789
+        - protocol: TCP
+          port: 6800
+          endPort: 7300
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-kubeapi
+  namespace: ceph-csi-operator-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: {{ node_cidr }}
+      ports:
+        - protocol: TCP
+          port: 6443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+  namespace: ceph-csi-operator-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
