@@ -1,0 +1,40 @@
+---
+# ============================================================
+# SMB CSI StorageClasses (one per share, credentials per namespace)
+# ============================================================
+# Rendered only when smb_enabled is true (see site.yml pre_tasks). One
+# StorageClass is created per entry in smb_shares, bound to that share's source.
+#
+# Credentials are ISOLATED PER NAMESPACE: each StorageClass resolves its Secret
+# in the PVC's OWN namespace via the ${pvc.namespace} token. This token is a
+# standard CSI feature (resolved by the kubelet / csi-provisioner before the
+# driver is called), NOT a Jinja2 variable, so it stays literal in the manifest.
+#
+# Consequence: this baseline does NOT create the Secret — you must create a
+# Secret named smb_secret_name in EVERY namespace that consumes an SMB share,
+# when you set up that application (the namespace itself is created later by
+# you, not by this baseline). See the README for the Secret manifest.
+# ============================================================
+{% for share in smb_shares %}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: "{{ share.name }}"
+provisioner: smb.csi.k8s.io
+parameters:
+  source: "{{ share.source }}"
+  csi.storage.k8s.io/provisioner-secret-name: "{{ smb_secret_name }}"
+  csi.storage.k8s.io/provisioner-secret-namespace: "${pvc.namespace}"
+  csi.storage.k8s.io/node-stage-secret-name: "{{ smb_secret_name }}"
+  csi.storage.k8s.io/node-stage-secret-namespace: "${pvc.namespace}"
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+{% set opts = share.mount_options | default(smb_mount_options) | default([]) %}
+{% if opts | length > 0 %}
+mountOptions:
+{% for opt in opts %}
+  - {{ opt }}
+{% endfor %}
+{% endif %}
+{% endfor %}

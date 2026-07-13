@@ -1,0 +1,32 @@
+---
+# ============================================================
+# NFS CSI StorageClasses (one per share)
+# ============================================================
+# Rendered only when nfs_enabled is true (see site.yml pre_tasks). One
+# StorageClass is created per entry in nfs_shares, bound to that share's
+# server:share. Plain NFS needs no credentials, so no Secret is referenced.
+# Reference from a PVC with: storageClassName: <nfs_shares[].name>
+# The driver pods (controller/node) are pulled as raw manifests via
+# k3s_server_manifests_urls and run in kube-system.
+# ============================================================
+{% for share in nfs_shares %}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: "{{ share.name }}"
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: "{{ share.server }}"
+  share: "{{ share.share }}"
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+{% set opts = share.mount_options | default(nfs_mount_options) | default([]) %}
+{% if opts | length > 0 %}
+mountOptions:
+{% for opt in opts %}
+  - {{ opt }}
+{% endfor %}
+{% endif %}
+{% endfor %}

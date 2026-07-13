@@ -103,6 +103,89 @@ metallb_ip_range: "192.168.1.150-192.168.1.199"
 metallb_pool_name: "default-pool"
 
 # ============================================================
+# NFS CSI (optional) — access existing NFS shares (e.g. a NAS export)
+# ============================================================
+# Set nfs_enabled to true to deploy the kubernetes-csi NFS driver and one
+# StorageClass per share listed in nfs_shares. When false, nothing is
+# downloaded, installed or configured. The NFS driver has no operator — it is
+# pulled as raw manifests, same pattern as MetalLB / ceph-csi-operator. Plain
+# NFS needs no credentials.
+nfs_enabled: false
+
+# Release tag of kubernetes-csi/csi-driver-nfs
+nfs_csi_version: "v4.13.4"
+
+# Default mountOptions applied to every NFS StorageClass. A share can override
+# these with its own mount_options field.
+nfs_mount_options:
+  - "nfsvers=4.1"
+
+# One StorageClass is created per entry (cluster-scoped, named per share). Set
+# the list to [] to deploy only the driver with no StorageClass. Each share:
+#   name  -> StorageClass name (storageClassName to reference in a PVC)
+#   server/share -> NFS server address and export path
+#   mount_options -> optional, overrides nfs_mount_options for this share
+nfs_shares:
+  - name: "nfs-media"
+    server: "nas.example.com"
+    share: "/export/media"
+  - name: "nfs-backup"
+    server: "nas2.example.com"
+    share: "/export/backup"
+    mount_options:
+      - "nfsvers=4.1"
+      - "ro"
+
+# ============================================================
+# SMB CSI (optional) — access existing SMB/CIFS shares (e.g. a NAS)
+# ============================================================
+# Set smb_enabled to true to deploy the kubernetes-csi SMB driver and one
+# StorageClass per share listed in smb_shares. When false, nothing is
+# downloaded, installed or configured. Like NFS, the SMB driver has no operator
+# — pulled as raw manifests.
+#
+# Credentials are ISOLATED PER NAMESPACE: each StorageClass resolves its Secret
+# in the PVC's OWN namespace via the ${pvc.namespace} token. This baseline does
+# NOT create that Secret — you create it (named smb_secret_name below) in every
+# namespace that consumes an SMB share, when you set up that application. See
+# the README for the manifest. The cluster all.yml therefore no longer holds
+# SMB credentials; they live with each application (vault-protected there).
+#
+# NOTE: the SMB node plugin bundles cifs-utils in its container image, so no
+# host package install is needed for username/password mounts. The host only
+# needs the `cifs` kernel module (present on standard Ubuntu kernels). Host
+# cifs-utils is required ONLY for Kerberos (sec=krb5) mounts.
+smb_enabled: false
+
+# Release tag of kubernetes-csi/csi-driver-smb
+smb_csi_version: "v1.20.3"
+
+# Name of the Secret the StorageClasses expect in each consuming namespace.
+smb_secret_name: "csi-smb-creds"
+
+# Default mountOptions applied to every SMB StorageClass. A share can override
+# these with its own mount_options field. These defaults match the upstream
+# example; noserverino is REQUIRED to avoid data corruption.
+smb_mount_options:
+  - "dir_mode=0777"
+  - "file_mode=0777"
+  - "noperm"
+  - "mfsymlinks"
+  - "cache=strict"
+  - "noserverino"
+
+# One StorageClass is created per entry (cluster-scoped, named per share). Set
+# the list to [] to deploy only the driver with no StorageClass. Each share:
+#   name -> StorageClass name (storageClassName to reference in a PVC)
+#   source -> SMB share UNC path, e.g. //nas/photos
+#   mount_options -> optional, overrides smb_mount_options for this share
+smb_shares:
+  - name: "smb-photos"
+    source: "//nas.example.com/photos"
+  - name: "smb-movies"
+    source: "//nas.example.com/movies"
+
+# ============================================================
 # K3s — Auto-deployed Manifests
 # ============================================================
 
@@ -126,3 +209,36 @@ k3s_server_manifests_templates:
   - 06-ceph-storageclasses.yml.j2
   - 10-ceph-csi-operator-config.yml.j2
   - 11-network-policies.yml.j2
+
+# ------------------------------------------------------------
+# Optional CSI driver manifests (NFS / SMB)
+# ------------------------------------------------------------
+# These sub-lists are NOT part of k3s_server_manifests_urls /
+# k3s_server_manifests_templates by default. site.yml (pre_tasks) appends them
+# to those lists only when the matching *_enabled flag is true. Inline {% if %}
+# is not valid inside a YAML list in a vars file, which is why the conditional
+# composition happens in the playbook rather than here. Keep the filenames
+# numbered to slot after the baseline (network-policies = 11).
+nfs_manifest_urls:
+  - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/{{ nfs_csi_version }}/deploy/{{ nfs_csi_version }}/rbac-csi-nfs.yaml"
+    filename: 12-nfs-rbac.yaml
+  - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/{{ nfs_csi_version }}/deploy/{{ nfs_csi_version }}/csi-nfs-driverinfo.yaml"
+    filename: 13-nfs-driverinfo.yaml
+  - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/{{ nfs_csi_version }}/deploy/{{ nfs_csi_version }}/csi-nfs-controller.yaml"
+    filename: 14-nfs-controller.yaml
+  - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/{{ nfs_csi_version }}/deploy/{{ nfs_csi_version }}/csi-nfs-node.yaml"
+    filename: 15-nfs-node.yaml
+nfs_manifest_templates:
+  - 20-nfs-storageclasses.yml.j2
+
+smb_manifest_urls:
+  - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/{{ smb_csi_version }}/deploy/{{ smb_csi_version }}/rbac-csi-smb.yaml"
+    filename: 16-smb-rbac.yaml
+  - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/{{ smb_csi_version }}/deploy/{{ smb_csi_version }}/csi-smb-driver.yaml"
+    filename: 17-smb-driver.yaml
+  - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/{{ smb_csi_version }}/deploy/{{ smb_csi_version }}/csi-smb-controller.yaml"
+    filename: 18-smb-controller.yaml
+  - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/{{ smb_csi_version }}/deploy/{{ smb_csi_version }}/csi-smb-node.yaml"
+    filename: 19-smb-node.yaml
+smb_manifest_templates:
+  - 21-smb-storageclasses.yml.j2

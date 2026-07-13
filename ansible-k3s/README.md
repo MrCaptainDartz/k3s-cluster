@@ -85,6 +85,78 @@ ceph fs subvolumegroup ls cephfs1_ssd        # → csi
 
 The `mds` cap above (`allow rws path=/volumes/csi`) must match this group name: the subvolume group `csi` lives at `/volumes/csi` in the filesystem.
 
+## Optional NAS storage (NFS & SMB CSI)
+
+For bulk data (photos, films, backups) on a **NAS**, you can optionally deploy the [NFS](https://github.com/kubernetes-csi/csi-driver-nfs) and/or [SMB](https://github.com/kubernetes-csi/csi-driver-smb) CSI drivers. Both are **disabled by default**; set the flag to `true`, list the shares you need, then rerun the playbook. When a flag is `false`, nothing is installed. Each entry in `nfs_shares` / `smb_shares` produces **one StorageClass** (cluster-scoped, named after the share), so different apps can use different shares — the app just picks the right `storageClassName`.
+
+```yaml
+# all.yml
+nfs_enabled: true
+nfs_shares:
+  - name: nfs-media          # StorageClass name -> storageClassName in a PVC
+    server: nas.example.com
+    share: /export/media
+  - name: nfs-backup
+    server: nas2.example.com
+    share: /export/backup
+    mount_options: [nfsvers=4.1, ro]   # optional, overrides nfs_mount_options
+
+smb_enabled: true
+smb_shares:
+  - name: smb-photos
+    source: "//nas.example.com/photos"
+  - name: smb-movies
+    source: "//nas.example.com/movies"
+```
+
+Reference the StorageClass explicitly in a PVC (none of them is the cluster default — Ceph RBD is):
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: photos
+  namespace: my-app
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: smb-photos      # or nfs-media, smb-movies, ...
+  resources:
+    requests:
+      storage: 100Gi
+```
+
+### SMB credentials — isolated per namespace
+
+The SMB StorageClasses resolve their credentials Secret in the **PVC's own namespace** via the CSI `${pvc.namespace}` token, so credentials are isolated per application. This baseline **does not** create that Secret (the namespaces are created later by you); you create it in **each namespace that consumes an SMB share**, when you set up that application. Put it alongside your app manifests and vault-protect it — it no longer lives in the cluster `all.yml`.
+
+```yaml
+# e.g. my-app/smb-creds.yaml (one per consuming namespace)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: csi-smb-creds              # must match smb_secret_name in all.yml
+  namespace: my-app
+type: Opaque
+stringData:
+  username: "USER"
+  password: "PASS"
+  domain: ""                       # omit or leave empty if no domain/workgroup
+```
+
+```bash
+kubectl apply -f my-app/smb-creds.yaml
+# or imperatively:
+kubectl -n my-app create secret generic csi-smb-creds \
+  --from-literal username=USER --from-literal password=PASS --from-literal domain=""
+```
+
+> NFS needs no credentials, so no Secret is required for the NFS StorageClasses.
+
+Notes:
+
+- **No host install** for SMB: the node plugin bundles `cifs-utils` (only the `cifs` kernel module is needed on the host; Kerberos would need host `cifs-utils`, not configured here).
+- The CSI **node plugin** is privileged/`hostNetwork` (like the Ceph plugin), but your **application** pods consuming the PVC are unprivileged — they just see a mounted filesystem.
+
 ## Quick Start
 
 ### 1. Install the dependency role
@@ -131,6 +203,13 @@ Here are some important variables based on the provided examples:
 | `cephfs_subvolumegroup` | `csi`                                | The CephFS subvolume group used by the CephFS driver (must exist in Ceph). |
 | `ceph_sc_rbd_name`    | `ceph-rbd`                             | Name of the RBD StorageClass (the `storageClassName` to reference in a PVC). |
 | `ceph_sc_cephfs_name` | `ceph-cephfs`                          | Name of the CephFS StorageClass (the `storageClassName` to reference in a PVC). |
+| `nfs_enabled`         | `false`                                | Deploy the NFS CSI driver + one StorageClass per entry in `nfs_shares`. `false` = nothing is installed. |
+| `nfs_csi_version`     | `v4.13.4`                              | Release tag of `kubernetes-csi/csi-driver-nfs` (raw manifests pulled from this tag). |
+| `nfs_shares`          | `[{name, server, share}]`              | One StorageClass per share (cluster-scoped, named after the share); `name` is the `storageClassName` to reference in a PVC. |
+| `smb_enabled`         | `false`                                | Deploy the SMB CSI driver + one StorageClass per entry in `smb_shares`. `false` = nothing is installed. |
+| `smb_csi_version`     | `v1.20.3`                              | Release tag of `kubernetes-csi/csi-driver-smb` (raw manifests pulled from this tag). |
+| `smb_shares`          | `[{name, source}]`                     | One StorageClass per share (cluster-scoped, named after the share); `name` is the `storageClassName` to reference in a PVC. |
+| `smb_secret_name`     | `csi-smb-creds`                        | Name of the credentials Secret you create **per namespace** (the StorageClasses resolve it via `${pvc.namespace}`). |
 
 #### Tested component versions
 
@@ -142,6 +221,8 @@ The versions below are the ones currently pinned in `inventory/group_vars/all.ym
 | kube-vip                | `kube_vip_version`        | `v1.2.1` |
 | MetalLB                 | `metallb_version`         | `v0.16.1`|
 | Ceph CSI Operator       | `ceph_csi_operator_version` | `v1.0.4`|
+| NFS CSI (optional)      | `nfs_csi_version`         | `v4.13.4`|
+| SMB CSI (optional)      | `smb_csi_version`         | `v1.20.3`|
 
 > K3s follows the `stable` channel, which is a moving target. For stricter reproducibility you may pin a specific release (e.g. `v1.31.2+k3s1`) instead.
 
@@ -217,7 +298,9 @@ ansible-k3s/
     ├── 05-ceph-secrets.yml.j2
     ├── 06-ceph-storageclasses.yml.j2
     ├── 10-ceph-csi-operator-config.yml.j2
-    └── 11-network-policies.yml.j2        # Baseline NetworkPolicies (kube-router netpol)
+    ├── 11-network-policies.yml.j2        # Baseline NetworkPolicies (kube-router netpol)
+    ├── 20-nfs-storageclasses.yml.j2       # NFS CSI StorageClasses, one per nfs_shares entry (only if nfs_enabled)
+    └── 21-smb-storageclasses.yml.j2       # SMB CSI StorageClasses, one per smb_shares entry (only if smb_enabled)
 ```
 
 ## Backups (etcd snapshots)
@@ -422,6 +505,12 @@ kubectl get pods -n ceph-csi-operator-system
 kubectl get cephconnection,clientprofile,driver -n ceph-csi-operator-system
 kubectl get csidriver
 kubectl get storageclass
+
+# Verify the optional NFS / SMB CSI drivers (only if nfs_enabled / smb_enabled)
+kubectl get pods -n kube-system -l app.kubernetes.io/name=csi-nfs-controller   # NFS controller
+kubectl get pods -n kube-system -l app.kubernetes.io/name=csi-smb-controller   # SMB controller
+kubectl get csidriver nfs.csi.k8s.io smb.csi.k8s.io
+kubectl get storageclass | grep -E 'nfs-|smb-'                                 # one SC per share
 
 # Verify the baseline NetworkPolicies
 kubectl get networkpolicy -A

@@ -2,5 +2,26 @@
 - name: Deploy K3s HA Cluster with kube-vip and MetalLB
   hosts: k3s_cluster
   gather_facts: true
+  pre_tasks:
+    # Compose the K3s auto-deploy manifest lists with the optional NFS/SMB CSI
+    # drivers. Inline {% if %} is not valid inside a YAML list in a vars file,
+    # so the conditional appends are done here: host-scoped facts override the
+    # group_vars base lists, which the xanmanning.k3s role then consumes. When a
+    # driver is disabled (*_enabled: false), its sub-list is skipped entirely —
+    # nothing is downloaded, installed or configured.
+    - name: Append optional NFS/SMB CSI driver manifests when enabled
+      ansible.builtin.set_fact:
+        k3s_server_manifests_urls: >-
+          {{
+            k3s_server_manifests_urls
+            + (nfs_enabled | bool | ternary(nfs_manifest_urls, []))
+            + (smb_enabled | bool | ternary(smb_manifest_urls, []))
+          }}
+        k3s_server_manifests_templates: >-
+          {{
+            k3s_server_manifests_templates
+            + (nfs_enabled | bool | ternary(nfs_manifest_templates, []))
+            + (smb_enabled | bool | ternary(smb_manifest_templates, []))
+          }}
   roles:
     - role: xanmanning.k3s
