@@ -49,6 +49,19 @@ k3s_server:
   etcd-snapshot-retention: "{{ k3s_etcd_snapshot_retention }}"
 
 # ============================================================
+# CoreDNS — HA replica count
+# ============================================================
+# K3s ships CoreDNS as a managed Addon, but since v1.25.5 (PR #6552) the
+# packaged coredns manifest does NOT set spec.replicas — so scaling it
+# persists across k3s restarts (the addon controller won't reset it). There is
+# no K3s server flag for this (unlike etcd-snapshot-schedule-cron), so the
+# desired count is re-asserted by a post_tasks step in site.yml on every deploy.
+# The Deployment's built-in topologySpreadConstraints (maxSkew:1, DoNotSchedule
+# on hostname) spread the pods one-per-node, so 3 = HA: any single node loss
+# leaves DNS up with no gap.
+coredns_replicas: 3
+
+# ============================================================
 # kube-vip — Control Plane Virtual IP
 # ============================================================
 

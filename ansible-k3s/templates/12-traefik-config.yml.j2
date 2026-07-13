@@ -4,7 +4,10 @@
 # CR is the supported override (higher values precedence than the chart defaults).
 #
 # Overrides (everything else uses chart defaults):
-# - kind: DaemonSet -> one Traefik per node (HA, no two on the same node).
+# - deployment.kind: DaemonSet -> one Traefik per node (HA, no two on the same
+#   node). NOTE: the chart (traefik 40.x / Traefik 3) reads deployment.kind, NOT a
+#   top-level kind (the old chart schema). A top-level `kind: DaemonSet` is a
+#   silent no-op and leaves a single-replica Deployment.
 # - control-plane tolerations -> schedules on the control planes.
 # - globalArguments: [] -> drops the anonymous version-check / usage-report calls.
 # - HTTP -> HTTPS redirect (web 80 -> websecure 443). websecure TLS is on by chart
@@ -26,7 +29,8 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
-    kind: DaemonSet
+    deployment:
+      kind: DaemonSet
     tolerations:
       - key: "node-role.kubernetes.io/control-plane"
         operator: "Exists"

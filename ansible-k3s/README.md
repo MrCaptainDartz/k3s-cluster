@@ -165,7 +165,7 @@ K3s ships [Traefik](https://traefik.io/) as a packaged Ingress Controller — th
 
 The config only overrides what differs from the chart defaults:
 
-- `kind: DaemonSet` — one Traefik per node (HA, no risk of two on the same node, unlike `replicas`).
+- `deployment.kind: DaemonSet` — one Traefik per node (HA, no risk of two on the same node, unlike `replicas`). Note the chart (Traefik v3 / chart v39+) reads `deployment.kind`, **not** a top-level `kind` (the old chart schema) — a top-level `kind: DaemonSet` is a silent no-op and leaves a single-replica Deployment.
 - control-plane tolerations — so the DaemonSet lands on the control planes.
 - `globalArguments: []` — drops the anonymous version-check / usage-report calls.
 - HTTP → HTTPS redirect (`web` 80 → `websecure` 443).
@@ -242,6 +242,7 @@ Here are some important variables based on the provided examples:
 | `k3s_release_version` | `stable`                               | K3s version to deploy (can be a specific release like `v1.31.2+k3s1`). |
 | `k3s_etcd_snapshot_cron` | `0 */6 * * *`                        | Cron expression for scheduled etcd snapshots (embedded etcd only).   |
 | `k3s_etcd_snapshot_retention` | `28`                         | Snapshots retained per control-plane node (≈ 7 days at 6 h intervals). |
+| `coredns_replicas`    | `3`                                    | CoreDNS replica count, re-asserted by a `post_tasks` step (no K3s flag exists; K3s v1.25.5+ doesn't pin replicas so the scale persists). `topologySpreadConstraints` spread pods one-per-node → HA. See "CoreDNS high availability". |
 | `k3s_vip`             | `192.168.1.10`                         | The target IP for kube-vip. This IP must be available on the network.  |
 | `k3s_vip_interface`   | `{{ ansible_default_ipv4.interface }}` | On which network interface to share the VIP.                           |
 | `node_cidr`           | `192.168.1.0/24`                       | Node-network CIDR (control planes + workers); used by the cert-manager NetworkPolicy (apiserver ingress/API egress). |
@@ -341,6 +342,20 @@ flowchart TD
     N1 -->|"Ceph CSI Driver"| CephStorage
     N2 -->|"Ceph CSI Driver"| CephStorage
     N3 -->|"Ceph CSI Driver"| CephStorage
+```
+
+### CoreDNS high availability
+
+K3s ships CoreDNS as a managed Addon, but since v1.25.5 (PR #6552) the packaged `coredns` manifest carries **no `spec.replicas`**, and there is **no server flag** to set the count (unlike `etcd-snapshot-schedule-cron`). Two consequences:
+
+- A manual `kubectl scale deploy coredns -n kube-system --replicas=N` **persists** across k3s restarts — the addon controller doesn't reset it.
+- The Deployment's built-in `topologySpreadConstraints` (`maxSkew: 1`, `DoNotSchedule` on `kubernetes.io/hostname`) spread the pods **one per node**, so `N = 3` (your node count) survives any single node loss with **zero DNS gap**.
+
+To make this durable and reproducible (not a one-off imperative scale), the count is driven by the `coredns_replicas` variable (default `3` in `all.yml`) and **re-asserted on every `ansible-playbook site.yml` run** by a `post_tasks` step that scales the Deployment on the first control plane. Verify after a deploy:
+
+```bash
+kubectl get deploy -n kube-system coredns        # READY 3/3
+kubectl get pod -n kube-system -l k8s-app=kube-dns -o wide   # one per node
 ```
 
 ## Project Structure

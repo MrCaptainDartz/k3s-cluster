@@ -48,3 +48,60 @@
           }}
   roles:
     - role: xanmanning.k3s
+
+  # CoreDNS is shipped by K3s as a managed Addon, but since v1.25.5 (PR #6552)
+  # the packaged coredns manifest carries NO spec.replicas — so a manual scale
+  # is NOT reset by the addon controller on restart, and there is no server
+  # flag to set it (unlike etcd-snapshot-schedule-cron). The durable way to pin
+  # a HA replica count is therefore to re-assert it here on every deploy, on the
+  # first control plane only (avoids three concurrent scales racing). The
+  # Deployment's built-in topologySpreadConstraints spread the pods one-per-node,
+  # so coredns_replicas=3 survives any single node loss with zero DNS gap.
+  post_tasks:
+    - name: Wait for CoreDNS Deployment to exist
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - get
+          - deploy
+          - coredns
+          - -n
+          - kube-system
+      changed_when: false
+      register: coredns_exists
+      retries: 30
+      delay: 3
+      until: coredns_exists.rc == 0
+      when: inventory_hostname == (groups['k3s_cluster'] | first)
+
+    - name: Read current CoreDNS replica count
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - get
+          - deploy
+          - coredns
+          - -n
+          - kube-system
+          - -o
+          - jsonpath={.spec.replicas}
+      changed_when: false
+      register: coredns_current_replicas
+      when: inventory_hostname == (groups['k3s_cluster'] | first)
+
+    - name: Scale CoreDNS to {{ coredns_replicas }}
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - scale
+          - deploy
+          - coredns
+          - -n
+          - kube-system
+          - --replicas={{ coredns_replicas }}
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - (coredns_current_replicas.stdout | int) != (coredns_replicas | int)
