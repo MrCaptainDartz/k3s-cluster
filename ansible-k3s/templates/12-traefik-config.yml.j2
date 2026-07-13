@@ -9,8 +9,12 @@
 # - globalArguments: [] -> drops the anonymous version-check / usage-report calls.
 # - HTTP -> HTTPS redirect (web 80 -> websecure 443). websecure TLS is on by chart
 #   default, serving Traefik's self-signed default cert (no cert resolver).
-# - Dashboard IngressRoute on (no host -> reachable at /dashboard/ via the LB IP;
-#   protect with auth if exposed beyond your LAN).
+# - Dashboard: the chart's dashboard IngressRoute is bound to the internal
+#   `traefik` entryPoint (container port 8080). We expose that entryPoint on the
+#   LoadBalancer (`ports.traefik.expose: true`) so the dashboard is reachable at
+#   http://<traefik_lb_ip>:8080/dashboard/ on the LAN. No host match -> any Host
+#   header works. It is UNAUTHENTICATED: fine on a trusted LAN, but add BasicAuth
+#   / an auth middleware if reachable beyond it.
 # - Fixed MetalLB IP via the metallb.io/loadBalancerIPs annotation on the Service
 #   (the metallb.universe.tf prefix is deprecated since MetalLB v0.14; the
 #   spec.loadBalancerIP field is being removed from Kubernetes, so the annotation
@@ -39,6 +43,10 @@ spec:
               to: websecure
               scheme: https
               permanent: true
+      traefik:
+        expose:
+          default: true
+        exposedPort: 8080
     ingressRoute:
       dashboard:
         enabled: true

@@ -1,7 +1,10 @@
 ---
 # Let's Encrypt ClusterIssuers (DNS-01, multi-provider). One per ACME server.
-# Each issuer has one dns01 solver per cred, routed by selector.dnsNames =
-# match_domains (cert-manager picks the solver for the Certificate's DNS names).
+# Each issuer has one dns01 solver per cred, routed by selector.dnsZones =
+# match_domains. dnsZones (NOT dnsNames) matches the apex, the wildcard AND any
+# concrete subdomain of each listed zone: a wildcard cert works today, and a
+# per-subdomain cert works later — no ansible change needed to migrate. (dnsNames
+# is exact-only and would reject concrete subdomains like foo.example.com.)
 # Cloudflare is built-in; OVH/Infomaniak use webhooks (32/31) whose groupName
 # must match.
 {% for srv in certmanager_acme_servers %}
@@ -19,7 +22,7 @@ spec:
     solvers:
 {% for cred in certmanager_dns_credentials %}
       - selector:
-          dnsNames:
+          dnsZones:
 {% for d in cred.match_domains %}
             - "{{ d }}"
 {% endfor %}

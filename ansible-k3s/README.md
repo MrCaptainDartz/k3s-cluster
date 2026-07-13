@@ -169,14 +169,14 @@ The config only overrides what differs from the chart defaults:
 - control-plane tolerations — so the DaemonSet lands on the control planes.
 - `globalArguments: []` — drops the anonymous version-check / usage-report calls.
 - HTTP → HTTPS redirect (`web` 80 → `websecure` 443).
-- dashboard IngressRoute **on** (reachable at `/dashboard/` on the LB IP).
+- dashboard IngressRoute **on** + its `traefik` entryPoint (container port 8080) **exposed on the LB** — reachable at `http://<LB-IP>:8080/dashboard/`.
 - fixed MetalLB IP via the `metallb.io/loadBalancerIPs` annotation (`traefik_lb_ip` — the `metallb.universe.tf` prefix is deprecated since v0.14, and `spec.loadBalancerIP` is being phased out of Kubernetes).
 
 Everything else uses chart defaults: both providers (`Ingress` + `IngressRoute`), `websecure` TLS **on** (Traefik serves its **self-signed default cert** when no cert resolver is configured — browsers warn), `service.type: LoadBalancer`, access logs **off**. Point your DNS at `traefik_lb_ip` and create `Ingress`/`IngressRoute` resources.
 
 **TLS**: Traefik serves its **self-signed default cert** until you enable the optional **cert-manager** below (Let's Encrypt DNS-01) and annotate your Ingress.
 
-**Dashboard**: the chart convenience IngressRoute has no host and no auth — it's reachable at `https://<LB-IP>/dashboard/` from anything that can hit the LB. Fine on a LAN; if you expose the cluster beyond it, bind the dashboard to a host and protect it (basic-auth / IP-allow) via your own `IngressRoute`.
+**Dashboard**: the chart convenience IngressRoute has no host and no auth. It is bound to the internal `traefik` entryPoint (container port 8080), which the HelmChartConfig exposes on the LoadBalancer — so it's reachable at `http://<traefik_lb_ip>:8080/dashboard/` from anything that can hit the LB (HTTP, not HTTPS; it's a separate port from `web`/`websecure`, so the 80→443 redirect doesn't apply). Fine on a LAN; if you expose the cluster beyond it, drop `ports.traefik.expose` and instead bind the dashboard to a host behind TLS + basic-auth/IP-allow via your own `IngressRoute`.
 
 **NetworkPolicy**: Traefik runs in `kube-system` (no deny there) but forwards to app namespaces under `default-deny-all` — allow ingress from Traefik's pods, see [Step 5](#step-5--only-if-the-app-must-be-reached-from-outside-allow-ingress).
 
@@ -184,7 +184,7 @@ Everything else uses chart defaults: both providers (`Ingress` + `IngressRoute`)
 
 Off by default (`certmanager_enabled: false`): nothing is installed and Traefik keeps its self-signed default cert — fine for tests. Flip the flag to deploy [cert-manager](https://cert-manager.io/) plus two Let's Encrypt `ClusterIssuer`s (staging + prod) using **DNS-01** challenges.
 
-Each `certmanager_dns_credentials` entry → one Secret (in `cert-manager`, vault-protected in `all.yml`) + one `dns01` solver inside every `ClusterIssuer`, routed to its domains by `match_domains`. Provider-specific:
+Each `certmanager_dns_credentials` entry → one Secret (in `cert-manager`, vault-protected in `all.yml`) + one `dns01` solver inside every `ClusterIssuer`, routed by `match_domains` (fed to `selector.dnsZones`, so the apex, the wildcard **and** any concrete subdomain of a listed zone all solve — issue a wildcard cert now, per-subdomain certs later with no ansible change). Provider-specific:
 
 | Provider | Credentials (in `all.yml`) | Webhook |
 | --- | --- | --- |
@@ -203,6 +203,8 @@ spec:
     - hosts: ["app.example.tld"]
       secretName: app-example-tls
 ```
+
+`hosts` can be the apex, a wildcard (`*.example.tld`), or any concrete subdomain of a `match_domains` zone — all are solved by the `dnsZones` selector. A common pattern is one wildcard cert reused across subdomains.
 
 Renewal is automatic (~30 days before expiry). The `cert-manager` namespace is locked down (deny-all both ways + explicit allows; no other namespace is touched).
 
@@ -595,9 +597,10 @@ kubectl get pods -n metallb-system
 
 # Verify Traefik (K3s-packaged Ingress Controller) and its HelmChartConfig
 kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik
-kubectl get svc -n kube-system traefik               # type LoadBalancer, EXTERNAL-IP == traefik_lb_ip
+kubectl get svc -n kube-system traefik               # type LoadBalancer, EXTERNAL-IP == traefik_lb_ip, exposes 80/443/8080
 kubectl get helmchartconfig -n kube-system traefik   # our values overlay
 kubectl get ingressclass                             # traefik should be present
+curl -s -o /dev/null -w '%{http_code}\n' http://<traefik_lb_ip>:8080/dashboard/   # 200 = dashboard reachable (unauthenticated, LAN)
 
 # Verify the Ceph storage configuration
 kubectl get pods -n ceph-csi-operator-system

@@ -2,7 +2,10 @@
 # cert-manager namespace: default-deny both directions + explicit allows only.
 # No other namespace is touched. Allowed flows:
 #   ingress: kube-apiserver (nodes) -> webhook :443  [from node_cidr]
-#   egress : kube-dns :53, kube-api :6443 [node_cidr]
+#   egress : DNS :53 anywhere (kube-dns for lookups + the authoritative NS of
+#            each issued domain, which cert-manager queries directly during its
+#            DNS-01 self-check before telling Let's Encrypt to verify)
+#   egress : kube-api :6443 [node_cidr]
 #   egress : TCP 443 anywhere (ACME + DNS-provider APIs; vanilla NP can't match
 #            FQDNs -> 0.0.0.0/0:443; Cilium toFQDNs is the future upgrade).
 apiVersion: networking.k8s.io/v1
@@ -43,13 +46,14 @@ spec:
   policyTypes:
     - Egress
   egress:
+    # kube-dns for ordinary cluster lookups, AND the authoritative nameservers of
+    # each issued domain (cert-manager's DNS-01 self-check resolves them via
+    # kube-dns then queries them directly on :53 to read the TXT record before
+    # asking Let's Encrypt to verify). Restricting :53 to kube-dns only breaks
+    # that self-check with "connection refused" on the authoritative NS.
     - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
+        - ipBlock:
+            cidr: 0.0.0.0/0
       ports:
         - protocol: UDP
           port: 53

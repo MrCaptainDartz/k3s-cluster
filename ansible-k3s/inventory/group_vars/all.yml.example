@@ -152,8 +152,10 @@ certmanager_acme_servers:
 
 # DNS credentials -> one entry per (provider/token), routed by match_domains.
 # Each entry creates a Secret in cert-manager and one dns01 solver inside every
-# ClusterIssuer above; cert-manager picks the solver matching the Certificate's
-# DNS names. Fields depend on the provider:
+# ClusterIssuer above. match_domains feed the solver's selector.dnsZones, so the
+# bare zone is enough: it covers the apex, the wildcard AND any concrete subdomain
+# (even multi-level). The "*.zone" entry is therefore optional/redundant — keep
+# just "example.tld". Fields depend on the provider:
 #   cloudflare : token
 #   ovh        : endpoint, application_key, application_secret, consumer_key
 #   infomaniak : token
@@ -162,7 +164,7 @@ certmanager_dns_credentials:
     provider: "cloudflare"
     secret_name: "cloudflare-api-token-main"
     token: "REDACTED"
-    match_domains: ["example.tld", "*.example.tld"]
+    match_domains: ["example.tld"]
   - name: "ovh-other"
     provider: "ovh"
     secret_name: "ovh-creds-other"
@@ -170,12 +172,12 @@ certmanager_dns_credentials:
     application_key: "REDACTED"
     application_secret: "REDACTED"
     consumer_key: "REDACTED"
-    match_domains: ["other.tld", "*.other.tld"]
+    match_domains: ["other.tld"]
   - name: "infomaniak-third"
     provider: "infomaniak"
     secret_name: "infomaniak-api-token-third"
     token: "REDACTED"
-    match_domains: ["third.tld", "*.third.tld"]
+    match_domains: ["third.tld"]
 
 # OVH webhook: groupName must match the webhook.groupName referenced by the OVH
 # solvers. Choose a unique value (your own domain is recommended).
