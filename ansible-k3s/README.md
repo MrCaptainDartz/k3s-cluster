@@ -7,7 +7,9 @@ It includes the following elements out of the box:
 - **3 Control Plane nodes** with embedded etcd for resilient data.
 - **[kube-vip](https://kube-vip.io/)** to provide a virtual IP (VIP) to access the Kubernetes API server, running here in ARP mode.
 - **[MetalLB](https://metallb.universe.tf/)** to provide IPs accessible on the local network for `LoadBalancer` type services.
+- **[Traefik](https://traefik.io/)** — the K3s-packaged Ingress Controller, kept enabled and customized via a `HelmChartConfig`.
 - **Ceph CSI** to automatically connect the cluster to your existing Proxmox/Ceph distributed storage, providing persistent volumes via RBD and CephFS.
+- **[cert-manager](https://cert-manager.io/)** (optional) — real TLS certificates from Let's Encrypt via DNS-01, with per-domain DNS-provider credentials (Cloudflare / OVH / Infomaniak) and a locked-down namespace.
 
 The deployment uses the highly popular Ansible role [ansible-role-k3s](https://github.com/PyratLabs/ansible-role-k3s).
 
@@ -157,6 +159,53 @@ Notes:
 - **No host install** for SMB: the node plugin bundles `cifs-utils` (only the `cifs` kernel module is needed on the host; Kerberos would need host `cifs-utils`, not configured here).
 - The CSI **node plugin** is privileged/`hostNetwork` (like the Ceph plugin), but your **application** pods consuming the PVC are unprivileged — they just see a mounted filesystem.
 
+## Traefik (Ingress)
+
+K3s ships [Traefik](https://traefik.io/) as a packaged Ingress Controller — this project **keeps it enabled** and customizes it via a `HelmChartConfig` (`templates/12-traefik-config.yml.j2`), the supported way to overlay values on the bundled `traefik` HelmChart (K3s rewrites `traefik.yaml` on startup, so don't edit it). Version follows your K3s release: **Traefik v3 on K3s v1.32+** (chart v39), v2 on v1.31 and earlier.
+
+The config only overrides what differs from the chart defaults:
+
+- `kind: DaemonSet` — one Traefik per node (HA, no risk of two on the same node, unlike `replicas`).
+- control-plane tolerations — so the DaemonSet lands on the control planes.
+- `globalArguments: []` — drops the anonymous version-check / usage-report calls.
+- HTTP → HTTPS redirect (`web` 80 → `websecure` 443).
+- dashboard IngressRoute **on** (reachable at `/dashboard/` on the LB IP).
+- fixed MetalLB IP via the `metallb.io/loadBalancerIPs` annotation (`traefik_lb_ip` — the `metallb.universe.tf` prefix is deprecated since v0.14, and `spec.loadBalancerIP` is being phased out of Kubernetes).
+
+Everything else uses chart defaults: both providers (`Ingress` + `IngressRoute`), `websecure` TLS **on** (Traefik serves its **self-signed default cert** when no cert resolver is configured — browsers warn), `service.type: LoadBalancer`, access logs **off**. Point your DNS at `traefik_lb_ip` and create `Ingress`/`IngressRoute` resources.
+
+**TLS**: Traefik serves its **self-signed default cert** until you enable the optional **cert-manager** below (Let's Encrypt DNS-01) and annotate your Ingress.
+
+**Dashboard**: the chart convenience IngressRoute has no host and no auth — it's reachable at `https://<LB-IP>/dashboard/` from anything that can hit the LB. Fine on a LAN; if you expose the cluster beyond it, bind the dashboard to a host and protect it (basic-auth / IP-allow) via your own `IngressRoute`.
+
+**NetworkPolicy**: Traefik runs in `kube-system` (no deny there) but forwards to app namespaces under `default-deny-all` — allow ingress from Traefik's pods, see [Step 5](#step-5--only-if-the-app-must-be-reached-from-outside-allow-ingress).
+
+## cert-manager (TLS) — optional
+
+Off by default (`certmanager_enabled: false`): nothing is installed and Traefik keeps its self-signed default cert — fine for tests. Flip the flag to deploy [cert-manager](https://cert-manager.io/) plus two Let's Encrypt `ClusterIssuer`s (staging + prod) using **DNS-01** challenges.
+
+Each `certmanager_dns_credentials` entry → one Secret (in `cert-manager`, vault-protected in `all.yml`) + one `dns01` solver inside every `ClusterIssuer`, routed to its domains by `match_domains`. Provider-specific:
+
+| Provider | Credentials (in `all.yml`) | Webhook |
+| --- | --- | --- |
+| Cloudflare | `token` | built-in |
+| OVH | `application_key` / `application_secret` / `consumer_key` + `endpoint` | [aureq chart](https://github.com/aureq/cert-manager-webhook-ovh), only if an OVH cred exists |
+| Infomaniak | `token` | [official manifest](https://github.com/Infomaniak/cert-manager-webhook-infomaniak), only if an Infomaniak cred exists |
+
+**Issue a cert** — annotate the Ingress:
+
+```yaml
+metadata:
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod   # or letsencrypt-staging for tests
+spec:
+  tls:
+    - hosts: ["app.example.tld"]
+      secretName: app-example-tls
+```
+
+Renewal is automatic (~30 days before expiry). The `cert-manager` namespace is locked down (deny-all both ways + explicit allows; no other namespace is touched).
+
 ## Quick Start
 
 ### 1. Install the dependency role
@@ -193,13 +242,21 @@ Here are some important variables based on the provided examples:
 | `k3s_etcd_snapshot_retention` | `28`                         | Snapshots retained per control-plane node (≈ 7 days at 6 h intervals). |
 | `k3s_vip`             | `192.168.1.10`                         | The target IP for kube-vip. This IP must be available on the network.  |
 | `k3s_vip_interface`   | `{{ ansible_default_ipv4.interface }}` | On which network interface to share the VIP.                           |
+| `node_cidr`           | `192.168.1.0/24`                       | Node-network CIDR (control planes + workers); used by the cert-manager NetworkPolicy (apiserver ingress/API egress). |
 | `metallb_ip_range`    | `192.168.1.150-192.168.1.199`          | The IP range dynamically assigned by MetalLB to your applications.     |
+| `traefik_lb_ip`       | `192.168.1.199`                        | Fixed MetalLB IP pinned to Traefik's LoadBalancer Service (must be within `metallb_ip_range`). |
 | `ceph_csi_operator_version` | `v1.0.4`                         | The [ceph-csi-operator](https://github.com/ceph/ceph-csi-operator) release deployed (CRDs, RBAC and operator manifests are pulled from this tag). |
 | `ceph_client_id`      | `admin`                                | The Ceph user used by the CSI driver to authenticate storage requests. |
 | `ceph_client_key`     | `YOUR-CEPH-KEYRING...`                 | The secret key that allows K3s to authenticate storage requests.       |
 | `ceph_monitors`       | `['192.168.1.200', ...]`               | The IPs of the available Ceph monitors on the network.                 |
 | `ceph_rbd_pool`       | `pool1_ssd`                            | The existing Ceph RBD pool backing the `ceph-rbd` StorageClass.        |
 | `cephfs_fs_name`      | `cephfs1_ssd`                          | The existing CephFS filesystem backing the `ceph-cephfs` StorageClass. |
+| `certmanager_enabled` | `false`                               | Deploy cert-manager + Let's Encrypt issuers (DNS-01). When `false`, nothing is installed and Traefik keeps its self-signed cert. |
+| `certmanager_version` | `v1.21.0`                             | [cert-manager](https://cert-manager.io/docs/installation/) release (official `cert-manager.yaml` pulled from this tag). |
+| `certmanager_acme_email` | `you@example.com`                  | Email registered with Let's Encrypt (expiry notices). |
+| `certmanager_acme_servers` | `[staging, prod]`                 | ACME endpoints → one `ClusterIssuer` each (staging = tests, prod = real). |
+| `certmanager_dns_credentials` | `[…]`                            | Per-provider DNS creds (Cloudflare/OVH/Infomaniak), each routed by `match_domains`; tokens are **vault-protected**. See `all.yml.example`. |
+| `certmanager_webhook_group_ovh` | `acme.myhomelab.example`        | OVH webhook `groupName` (must match the issuer); unique to you. |
 | `cephfs_subvolumegroup` | `csi`                                | The CephFS subvolume group used by the CephFS driver (must exist in Ceph). |
 | `ceph_sc_rbd_name`    | `ceph-rbd`                             | Name of the RBD StorageClass (the `storageClassName` to reference in a PVC). |
 | `ceph_sc_cephfs_name` | `ceph-cephfs`                          | Name of the CephFS StorageClass (the `storageClassName` to reference in a PVC). |
@@ -220,9 +277,13 @@ The versions below are the ones currently pinned in `inventory/group_vars/all.ym
 | K3s (channel)           | `k3s_release_version`     | `stable` |
 | kube-vip                | `kube_vip_version`        | `v1.2.1` |
 | MetalLB                 | `metallb_version`         | `v0.16.1`|
+| Traefik (packaged with K3s) | follows `k3s_release_version` | Traefik **v3** on K3s v1.32+ (chart v39); v2 on v1.31 and earlier |
 | Ceph CSI Operator       | `ceph_csi_operator_version` | `v1.0.4`|
 | NFS CSI (optional)      | `nfs_csi_version`         | `v4.13.4`|
 | SMB CSI (optional)      | `smb_csi_version`         | `v1.20.3`|
+| cert-manager (optional) | `certmanager_version`     | `v1.21.0`|
+| OVH DNS webhook (optional) | `certmanager_webhook_ovh_chart_version` | `0.9.14` (aureq chart) |
+| Infomaniak DNS webhook (optional) | `certmanager_webhook_infomaniak_version` | `v0.3.1` |
 
 > K3s follows the `stable` channel, which is a moving target. For stricter reproducibility you may pin a specific release (e.g. `v1.31.2+k3s1`) instead.
 
@@ -299,8 +360,14 @@ ansible-k3s/
     ├── 06-ceph-storageclasses.yml.j2
     ├── 10-ceph-csi-operator-config.yml.j2
     ├── 11-network-policies.yml.j2        # Baseline NetworkPolicies (kube-router netpol)
+    ├── 12-traefik-config.yml.j2          # HelmChartConfig customizing the K3s-packaged Traefik
     ├── 20-nfs-storageclasses.yml.j2       # NFS CSI StorageClasses, one per nfs_shares entry (only if nfs_enabled)
-    └── 21-smb-storageclasses.yml.j2       # SMB CSI StorageClasses, one per smb_shares entry (only if smb_enabled)
+    ├── 21-smb-storageclasses.yml.j2       # SMB CSI StorageClasses, one per smb_shares entry (only if smb_enabled)
+    ├── 32-certmanager-webhook-ovh.yml.j2  # HelmChart CR installing the OVH DNS-01 webhook (only if an OVH cred exists)
+    ├── 33-certmanager-dns-secrets.yml.j2  # DNS provider credential Secrets (only if certmanager_enabled)
+    ├── 34-certmanager-issuers.yml.j2     # Let's Encrypt ClusterIssuers, multi-provider DNS-01 (only if certmanager_enabled)
+    ├── 35-certmanager-network-policies.yml.j2 # cert-manager namespace deny-all + explicit allows (only if certmanager_enabled)
+    └── 36-certmanager-webhook-secret-reader.yml.j2 # Role+RoleBinding letting OVH/Infomaniak webhooks read their cred Secrets (only if certmanager_enabled)
 ```
 
 ## Backups (etcd snapshots)
@@ -451,7 +518,33 @@ spec:
             cidr: 192.168.1.0/24       # your node/L2 subnet (SNAT'd source); adapt
 ```
 
-For an **ingress controller** (Layer 7) instead of a raw LoadBalancer, replace the `ipBlock` with a `namespaceSelector` on the controller's namespace, e.g. `kubernetes.io/metadata.name: ingress-nginx`. To preserve the real client IP on a `LoadBalancer`, set `externalTrafficPolicy: Local` on the Service and allow the **client CIDR** instead of the node subnet.
+For an **ingress controller** (Layer 7) instead of a raw LoadBalancer — e.g. the packaged **Traefik** in `kube-system` — replace the `ipBlock` with a `namespaceSelector` on `kube-system` combined with a `podSelector` on `app.kubernetes.io/name=traefik`, so only Traefik's pods can reach the backend:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-traefik-ingress
+  namespace: my-app
+spec:
+  podSelector:
+    matchLabels:
+      app: my-app
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: 8080                  # the port your app Service listens on
+```
+
+> A `namespaceSelector` and a `podSelector` in the **same** `from` entry are AND-ed: the source pod must be in `kube-system` **and** match the Traefik label. To preserve the real client IP on a `LoadBalancer` (no ingress controller), set `externalTrafficPolicy: Local` on the Service and allow the **client CIDR** instead of the node subnet.
 
 #### Step 6 — (only if the app must reach outside) Allow egress
 
@@ -500,6 +593,12 @@ kubectl get pods -n kube-system -l app.kubernetes.io/name=kube-vip-ds
 # Verify MetalLB
 kubectl get pods -n metallb-system
 
+# Verify Traefik (K3s-packaged Ingress Controller) and its HelmChartConfig
+kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik
+kubectl get svc -n kube-system traefik               # type LoadBalancer, EXTERNAL-IP == traefik_lb_ip
+kubectl get helmchartconfig -n kube-system traefik   # our values overlay
+kubectl get ingressclass                             # traefik should be present
+
 # Verify the Ceph storage configuration
 kubectl get pods -n ceph-csi-operator-system
 kubectl get cephconnection,clientprofile,driver -n ceph-csi-operator-system
@@ -514,6 +613,15 @@ kubectl get storageclass | grep -E 'nfs-|smb-'                                 #
 
 # Verify the baseline NetworkPolicies
 kubectl get networkpolicy -A
+
+# Verify cert-manager (only if certmanager_enabled)
+kubectl get pods -n cert-manager
+kubectl get clusterissuer                          # letsencrypt-staging / letsencrypt-prod, READY=True once ACME registers
+kubectl get helmchart -n kube-system cert-manager-webhook-ovh   # only if an OVH cred exists
+kubectl get role,rolebinding -n cert-manager | grep cred-reader  # webhook secret-reader RBAC (only if OVH/Infomaniak creds exist)
+kubectl get networkpolicy -n cert-manager           # default-deny-all + the 4 explicit allows
+# Confirm the API egress target matches the NP (endpoints within node_cidr):
+kubectl get endpoints -n default kubernetes -o wide
 
 # Verify the etcd snapshot schedule (run on a control-plane node)
 sudo k3s etcd-snapshot ls

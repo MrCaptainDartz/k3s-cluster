@@ -44,6 +44,9 @@ terraform.rc
 ansible-k3s/inventory/hosts.yml
 ansible-k3s/inventory/group_vars/all.yml
 
+# Ignore ansible-galaxy downloaded roles (installed locally via requirements)
+ansible-k3s/roles/
+
 ## OS & Editors ##
 .DS_Store
 .idea/

@@ -23,5 +23,28 @@
             + (nfs_enabled | bool | ternary(nfs_manifest_templates, []))
             + (smb_enabled | bool | ternary(smb_manifest_templates, []))
           }}
+
+    # cert-manager: append the base manifests (operator, DNS-cred Secrets,
+    # issuers, NetworkPolicy) when enabled, plus each DNS webhook ONLY if at
+    # least one credential of its provider is present. The webhook-needed flags
+    # guard against deploying an unused webhook component.
+    - name: Append optional cert-manager manifests when enabled
+      ansible.builtin.set_fact:
+        k3s_server_manifests_urls: >-
+          {{
+            k3s_server_manifests_urls
+            + (certmanager_enabled | bool | ternary(certmanager_manifest_urls, []))
+            + (((certmanager_enabled | bool) and
+                (certmanager_dns_credentials | default([]) | selectattr('provider', 'equalto', 'infomaniak') | list | length > 0))
+               | ternary(certmanager_webhook_infomaniak_urls, []))
+          }}
+        k3s_server_manifests_templates: >-
+          {{
+            k3s_server_manifests_templates
+            + (certmanager_enabled | bool | ternary(certmanager_manifest_templates, []))
+            + (((certmanager_enabled | bool) and
+                (certmanager_dns_credentials | default([]) | selectattr('provider', 'equalto', 'ovh') | list | length > 0))
+               | ternary(certmanager_webhook_ovh_templates, []))
+          }}
   roles:
     - role: xanmanning.k3s

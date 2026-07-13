@@ -29,11 +29,13 @@ k3s_registration_address: "{{ k3s_vip }}"
 # ============================================================
 
 # Components to disable in K3s
-# - servicelb: replaced by MetalLB
-# - traefik: install your own Ingress Controller via Helm for more control
+# - servicelb: replaced by MetalLB (Traefik's LoadBalancer Service gets a
+#   MetalLB IP)
+# - local-storage: we use Ceph (RBD/CephFS) + optional NFS/SMB CSI
+# Traefik is KEPT (the K3s-packaged Ingress Controller) and customized via a
+# HelmChartConfig — see the "Traefik (Ingress)" section below.
 k3s_disabled_components:
   - servicelb
-  - traefik
   - local-storage
 
 k3s_server:
@@ -59,6 +61,11 @@ k3s_vip_interface: "{{ ansible_default_ipv4.interface }}"
 # kube-vip container image and version
 kube_vip_image: "ghcr.io/kube-vip/kube-vip"
 kube_vip_version: "v1.2.1"
+
+# CIDR of the node network (control planes + workers). The kube-apiserver runs
+# as a process on the nodes, so the cert-manager NetworkPolicy allows ingress
+# from / egress to this CIDR (API on :6443, admission webhooks on :443).
+node_cidr: "192.168.1.0/24"
 
 # ============================================================
 # Ceph CSI
@@ -101,6 +108,84 @@ metallb_ip_range: "192.168.1.150-192.168.1.199"
 
 # Name of the MetalLB IP pool
 metallb_pool_name: "default-pool"
+
+# ============================================================
+# Traefik (K3s-packaged Ingress Controller)
+# ============================================================
+# Kept enabled (not in k3s_disabled_components). Customized via a HelmChartConfig
+# (templates/12-traefik-config.yml.j2): runs as a DaemonSet (one per node),
+# redirects HTTP->HTTPS, enables the dashboard IngressRoute and drops the
+# anonymous usage calls. The rest uses the chart defaults (websecure TLS on ->
+# self-signed default cert). Only traefik_lb_ip is configurable here — it pins
+# Traefik's LoadBalancer Service to a fixed MetalLB IP via the metallb.io
+# annotation (the current prefix; metallb.universe.tf is deprecated since v0.14).
+# See the README "Traefik" section.
+
+# Fixed MetalLB IP for Traefik's LoadBalancer Service. Must be within
+# metallb_ip_range and free. Last address of the pool by default.
+traefik_lb_ip: "192.168.1.199"
+
+# ============================================================
+# cert-manager (optional) — real TLS via Let's Encrypt DNS-01
+# ============================================================
+# Flip certmanager_enabled to deploy cert-manager + Let's Encrypt ClusterIssuers
+# (staging + prod). When false, nothing is installed and Traefik keeps its
+# self-signed default cert. DNS providers (cloudflare built-in; ovh/infomaniak
+# via webhooks, deployed only when a cred of that provider is present) are routed
+# by domain. Tokens/keys are VAULT-protected (like ceph_client_key): put the real
+# values in the gitignored all.yml, never in this committed example.
+certmanager_enabled: false
+
+# cert-manager release (official cert-manager.yaml is pulled from this tag).
+certmanager_version: "v1.21.0"
+
+# Email registered with Let's Encrypt (expiry notices).
+certmanager_acme_email: "you@example.com"
+
+# ACME servers -> one ClusterIssuer each. Staging issues untrusted certs with no
+# rate-limit (use it for tests); prod issues real, browser-trusted certs.
+certmanager_acme_servers:
+  - name: "letsencrypt-staging"
+    server: "https://acme-staging-v02.api.letsencrypt.org/directory"
+  - name: "letsencrypt-prod"
+    server: "https://acme-v02.api.letsencrypt.org/directory"
+
+# DNS credentials -> one entry per (provider/token), routed by match_domains.
+# Each entry creates a Secret in cert-manager and one dns01 solver inside every
+# ClusterIssuer above; cert-manager picks the solver matching the Certificate's
+# DNS names. Fields depend on the provider:
+#   cloudflare : token
+#   ovh        : endpoint, application_key, application_secret, consumer_key
+#   infomaniak : token
+certmanager_dns_credentials:
+  - name: "cloudflare-main"
+    provider: "cloudflare"
+    secret_name: "cloudflare-api-token-main"
+    token: "REDACTED"
+    match_domains: ["example.tld", "*.example.tld"]
+  - name: "ovh-other"
+    provider: "ovh"
+    secret_name: "ovh-creds-other"
+    endpoint: "ovh-eu"
+    application_key: "REDACTED"
+    application_secret: "REDACTED"
+    consumer_key: "REDACTED"
+    match_domains: ["other.tld", "*.other.tld"]
+  - name: "infomaniak-third"
+    provider: "infomaniak"
+    secret_name: "infomaniak-api-token-third"
+    token: "REDACTED"
+    match_domains: ["third.tld", "*.third.tld"]
+
+# OVH webhook: groupName must match the webhook.groupName referenced by the OVH
+# solvers. Choose a unique value (your own domain is recommended).
+certmanager_webhook_group_ovh: "acme.myhomelab.example"
+certmanager_webhook_ovh_chart_version: "0.9.14"
+certmanager_webhook_ovh_chart_repo: "https://aureq.github.io/cert-manager-webhook-ovh"
+
+# Infomaniak webhook: official rendered manifest (groupName acme.infomaniak.com
+# is baked in by the publisher).
+certmanager_webhook_infomaniak_version: "v0.3.1"
 
 # ============================================================
 # NFS CSI (optional) — access existing NFS shares (e.g. a NAS export)
@@ -209,6 +294,7 @@ k3s_server_manifests_templates:
   - 06-ceph-storageclasses.yml.j2
   - 10-ceph-csi-operator-config.yml.j2
   - 11-network-policies.yml.j2
+  - 12-traefik-config.yml.j2
 
 # ------------------------------------------------------------
 # Optional CSI driver manifests (NFS / SMB)
@@ -242,3 +328,25 @@ smb_manifest_urls:
     filename: 19-smb-node.yaml
 smb_manifest_templates:
   - 21-smb-storageclasses.yml.j2
+
+# ------------------------------------------------------------
+# Optional cert-manager manifests
+# ------------------------------------------------------------
+# Like NFS/SMB, these sub-lists are NOT part of k3s_server_manifests_urls /
+# k3s_server_manifests_templates by default. site.yml (pre_tasks) appends them
+# when certmanager_enabled is true. The DNS webhooks (OVH/Infomaniak) are added
+# only when at least one credential of the matching provider is present
+# (computed in site.yml from certmanager_dns_credentials).
+certmanager_manifest_urls:
+  - url: "https://github.com/cert-manager/cert-manager/releases/download/{{ certmanager_version }}/cert-manager.yaml"
+    filename: 30-cert-manager.yaml
+certmanager_manifest_templates:
+  - 33-certmanager-dns-secrets.yml.j2
+  - 34-certmanager-issuers.yml.j2
+  - 35-certmanager-network-policies.yml.j2
+  - 36-certmanager-webhook-secret-reader.yml.j2
+certmanager_webhook_ovh_templates:
+  - 32-certmanager-webhook-ovh.yml.j2
+certmanager_webhook_infomaniak_urls:
+  - url: "https://github.com/Infomaniak/cert-manager-webhook-infomaniak/releases/download/{{ certmanager_webhook_infomaniak_version }}/rendered-manifest.yaml"
+    filename: 31-certmanager-webhook-infomaniak.yaml

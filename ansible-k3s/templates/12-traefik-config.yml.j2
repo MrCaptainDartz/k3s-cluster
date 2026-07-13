@@ -1,0 +1,47 @@
+---
+# HelmChartConfig overlaying the K3s-packaged Traefik ("traefik" HelmChart in
+# kube-system). Do NOT edit K3s's traefik.yaml — it is rewritten on startup; this
+# CR is the supported override (higher values precedence than the chart defaults).
+#
+# Overrides (everything else uses chart defaults):
+# - kind: DaemonSet -> one Traefik per node (HA, no two on the same node).
+# - control-plane tolerations -> schedules on the control planes.
+# - globalArguments: [] -> drops the anonymous version-check / usage-report calls.
+# - HTTP -> HTTPS redirect (web 80 -> websecure 443). websecure TLS is on by chart
+#   default, serving Traefik's self-signed default cert (no cert resolver).
+# - Dashboard IngressRoute on (no host -> reachable at /dashboard/ via the LB IP;
+#   protect with auth if exposed beyond your LAN).
+# - Fixed MetalLB IP via the metallb.io/loadBalancerIPs annotation on the Service
+#   (the metallb.universe.tf prefix is deprecated since MetalLB v0.14; the
+#   spec.loadBalancerIP field is being removed from Kubernetes, so the annotation
+#   is the supported way).
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    kind: DaemonSet
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+    globalArguments: []
+    ports:
+      web:
+        http:
+          redirections:
+            entryPoint:
+              to: websecure
+              scheme: https
+              permanent: true
+    ingressRoute:
+      dashboard:
+        enabled: true
+    service:
+      annotations:
+        metallb.io/loadBalancerIPs: "{{ traefik_lb_ip }}"

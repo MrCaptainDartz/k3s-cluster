@@ -1,0 +1,58 @@
+---
+# Let's Encrypt ClusterIssuers (DNS-01, multi-provider). One per ACME server.
+# Each issuer has one dns01 solver per cred, routed by selector.dnsNames =
+# match_domains (cert-manager picks the solver for the Certificate's DNS names).
+# Cloudflare is built-in; OVH/Infomaniak use webhooks (32/31) whose groupName
+# must match.
+{% for srv in certmanager_acme_servers %}
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: "{{ srv.name }}"
+spec:
+  acme:
+    server: "{{ srv.server }}"
+    email: "{{ certmanager_acme_email }}"
+    privateKeySecretRef:
+      name: "{{ srv.name }}-account-key"
+    solvers:
+{% for cred in certmanager_dns_credentials %}
+      - selector:
+          dnsNames:
+{% for d in cred.match_domains %}
+            - "{{ d }}"
+{% endfor %}
+        dns01:
+{% if cred.provider == "cloudflare" %}
+          cloudflare:
+            apiTokenSecretRef:
+              name: "{{ cred.secret_name }}"
+              key: token
+{% elif cred.provider == "ovh" %}
+          webhook:
+            groupName: {{ certmanager_webhook_group_ovh }}
+            solverName: ovh
+            config:
+              endpoint: {{ cred.endpoint }}
+              authenticationMethod: application
+              applicationKeyRef:
+                name: "{{ cred.secret_name }}"
+                key: applicationKey
+              applicationSecretRef:
+                name: "{{ cred.secret_name }}"
+                key: applicationSecret
+              applicationConsumerKeyRef:
+                name: "{{ cred.secret_name }}"
+                key: applicationConsumerKey
+{% elif cred.provider == "infomaniak" %}
+          webhook:
+            groupName: acme.infomaniak.com
+            solverName: infomaniak
+            config:
+              apiTokenSecretRef:
+                name: "{{ cred.secret_name }}"
+                key: api-token
+{% endif %}
+{% endfor %}
+{% endfor %}
