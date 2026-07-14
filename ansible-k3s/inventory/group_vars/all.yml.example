@@ -330,6 +330,7 @@ k3s_server_manifests_templates:
   - 10-ceph-csi-operator-config.yml.j2
   - 11-network-policies.yml.j2
   - 12-traefik-config.yml.j2
+  - 13-pod-security.yml.j2
 
 # ------------------------------------------------------------
 # Optional CSI driver manifests (NFS / SMB)

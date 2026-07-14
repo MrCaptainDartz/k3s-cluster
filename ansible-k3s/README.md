@@ -378,6 +378,7 @@ ansible-k3s/
     ├── 10-ceph-csi-operator-config.yml.j2
     ├── 11-network-policies.yml.j2        # Baseline NetworkPolicies (kube-router netpol)
     ├── 12-traefik-config.yml.j2          # HelmChartConfig customizing the K3s-packaged Traefik
+    ├── 13-pod-security.yml.j2            # Pod Security Standards: enforce=baseline on `default`
     ├── 20-nfs-storageclasses.yml.j2       # NFS CSI StorageClasses, one per nfs_shares entry (only if nfs_enabled)
     ├── 21-smb-storageclasses.yml.j2       # SMB CSI StorageClasses, one per smb_shares entry (only if smb_enabled)
     ├── 32-certmanager-webhook-ovh.yml.j2  # HelmChart CR installing the OVH DNS-01 webhook (only if an OVH cred exists)
@@ -408,9 +409,33 @@ sudo k3s etcd-snapshot snapshot ...
 
 > Snapshots stay on the node by default. For off-node / off-site backup, point K3s at an S3 bucket (`etcd-s3-endpoint`, `etcd-s3-bucket`, …) or sync the snapshot directory elsewhere — out of scope for this homelab baseline.
 
-## Network policies
+## Pod Security Standards (PSS)
 
-K3s enforces Kubernetes `NetworkPolicy` resources **out of the box** via its embedded **kube-router network-policy controller**, which is active by default alongside the Flannel CNI. Disable it with `--disable-network-policy` only if you install a CNI that brings its own policy engine (Calico, Cilium, …).
+Complementing the network zero-trust baseline, the auto-deployed manifest `13-pod-security.yml.j2` enforces Kubernetes **Pod Security Standards** (the label-based admission control that replaced PodSecurityPolicy in v1.25).
+
+| Namespace | `enforce` | `audit` / `warn` | Effect |
+| --------- | --------- | ---------------- | ------ |
+| `default` | `baseline` | `restricted` | Rejects privileged / `hostPath` / `hostNetwork` / `hostPID` / all-capabilities pods; logs+warns (does **not** block) pods that could be hardened to `restricted`. `default` is the strict-quarantine namespace (no real app belongs here), so `baseline` breaks nothing while closing escape vectors. |
+| `cert-manager` (when enabled) | `baseline` | `restricted` | Same hardening: cert-manager's pods (controller/webhook/cainjector + the OVH webhook) are all plain pods (no `privileged`/`hostNetwork`/`hostPath`), so `baseline` breaks nothing and adds defense-in-depth on a namespace that already has a deny-all NetworkPolicy. |
+| `cert-manager-infomaniak` (when an Infomaniak cred exists) | `baseline` | `restricted` | Same: the Infomaniak webhook runs here (separate namespace, created by its rendered-manifest); it is a plain pod, so `baseline` is safe. Pre-created with labels by `13-`, then patched by `31-`. |
+| `kube-system`, `metallb-system`, `ceph-csi-operator-system` | — (unlabelled) | — | **Intentionally exempt**: these hold system pods that legitimately need `privileged`/`hostNetwork` (kube-vip, Traefik, MetalLB speakers, CSI node plugins). K3s sets no cluster-wide default profile, so unlabelled = no enforcement. |
+
+`restricted` is **not** enforced anywhere automatically — too many images do not comply (`runAsNonRoot`, `seccomp=RuntimeDefault`) and it would turn the baseline into friction. Opt into it **per sensitive namespace** when you create one.
+
+**Application namespaces**: create them with `enforce=baseline` so a misconfigured/compromised app pod cannot escalate to `hostPath`/`privileged`. See [Step 1 of "Securing a new namespace"](#step-1--create-the-namespace).
+
+Verify after a deploy:
+
+```bash
+kubectl get --show-labels ns default | grep -o 'pod-security.kubernetes.io/[^,]*'
+# pod-security.kubernetes.io/audit=restricted
+# pod-security.kubernetes.io/enforce=baseline
+# pod-security.kubernetes.io/warn=restricted
+# (a pod trying privileged in `default` is now rejected:)
+kubectl -n default run pss-test --image=busybox --privileged --restart=Never -- true   # Error: ... privileged
+```
+
+## Network policies
 
 No policies are applied by default, so the pod network is flat: every pod can reach every pod, across all namespaces. The auto-deployed manifest `11-network-policies.yml.j2` installs a **zero-trust** cluster baseline: **deny all ingress AND egress** in three namespaces, then re-open only the minimal egress each system component needs. `kube-system` deliberately gets **no policy** (its critical components — CoreDNS, kube-proxy, metrics-server, Traefik, kube-vip — need broad connectivity and run partly `hostNetwork`; locking it down on K3s is risky and out of scope for this baseline).
 
@@ -440,9 +465,16 @@ A freshly created namespace has **no NetworkPolicy**, so the pod network is flat
 
 #### Step 1 — Create the namespace
 
+Create the namespace **with `enforce=baseline`** so a misconfigured or compromised pod cannot escalate to `privileged` / `hostPath` / `hostNetwork` (mirrors the cluster `default` baseline — see [Pod Security Standards](#pod-security-standards-pss)). `baseline` lets ~95 % of normal pods through unchanged; it only blocks the genuine escape vectors.
+
 ```bash
 kubectl create namespace my-app
+kubectl label namespace my-app \
+  pod-security.kubernetes.io/enforce=baseline \
+  pod-security.kubernetes.io/enforce-version=latest
 ```
+
+> If your app genuinely needs a baseline-violating pod (a CSI-style helper, a node exporter with `hostNetwork`), prefer putting that specific pod in a dedicated **exempt** namespace labelled `pod-security.kubernetes.io/enforce=privileged` (or `pod-security.kubernetes.io/exempt: true`), rather than weakening the app namespace. Most apps never need this.
 
 #### Step 2 — Deny all (close the namespace)
 
@@ -828,6 +860,11 @@ kubectl get networkpolicy -A
 # Quick quarantine check — a pod in `default` resolves DNS but CANNOT reach outside:
 kubectl run np-qc --rm -i --restart=Never --image=registry.k8s.io/e2e-test-images/jessie-dind:1.0 -- nslookup kubernetes.default   # resolves (DNS allowed)
 kubectl run np-qc --rm -i --restart=Never --image=registry.k8s.io/e2e-test-images/jessie-dind:1.0 -- wget -T3 -qO- https://1.1.1.1 2>&1 | head   # FAILS (quarantine)
+
+# Verify Pod Security Standards on `default` (enforce=baseline; a privileged pod is rejected)
+kubectl get --show-labels ns default | grep -o 'pod-security.kubernetes.io/[^,]*'
+# (and on cert-manager when enabled; cert-manager-infomaniak only when an Infomaniak cred exists)
+kubectl get --show-labels ns cert-manager cert-manager-infomaniak 2>/dev/null | grep -o 'pod-security.kubernetes.io/[^,]*'
 
 # Verify cert-manager (only if certmanager_enabled)
 kubectl get pods -n cert-manager
