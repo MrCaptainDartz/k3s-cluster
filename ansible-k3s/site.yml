@@ -34,12 +34,28 @@
           k3s_vip_interface explicitly in inventory/group_vars/all.yml.
       when: k3s_vip_interface | length == 0
 
-    # Compose the K3s auto-deploy manifest lists with the optional NFS/SMB CSI
-    # drivers. Inline {% if %} is not valid inside a YAML list in a vars file,
-    # so the conditional appends are done here: host-scoped facts override the
-    # group_vars base lists, which the xanmanning.k3s role then consumes. When a
-    # driver is disabled (*_enabled: false), its sub-list is skipped entirely —
-    # nothing is downloaded, installed or configured.
+    # Compose the K3s auto-deploy manifest lists. Ceph CSI is the always-on
+    # primary storage (no *_enabled flag) and gets its own group appended
+    # unconditionally; the NFS/SMB CSI drivers and cert-manager are optional and
+    # appended only when their *_enabled flag is true. Inline {% if %} is not
+    # valid inside a YAML list in a vars file, so the composition is done here:
+    # host-scoped facts override the group_vars base lists, which the
+    # xanmanning.k3s role then consumes. When an optional driver is disabled
+    # (*_enabled: false), its sub-list is skipped entirely — nothing is
+    # downloaded, installed or configured.
+    - name: Append Ceph CSI manifests (always-on primary storage, group 50-56)
+      ansible.builtin.set_fact:
+        k3s_server_manifests_urls: >-
+          {{
+            k3s_server_manifests_urls
+            + ceph_manifest_urls
+          }}
+        k3s_server_manifests_templates: >-
+          {{
+            k3s_server_manifests_templates
+            + ceph_manifest_templates
+          }}
+
     - name: Append optional NFS/SMB CSI driver manifests when enabled
       ansible.builtin.set_fact:
         k3s_server_manifests_urls: >-

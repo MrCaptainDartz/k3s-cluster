@@ -8,10 +8,12 @@
 # every pod can reach every pod, across all namespaces.
 #
 # This manifest installs a ZERO-TRUST cluster baseline: deny ALL ingress AND
-# egress in three namespaces, then re-open only the minimal egress each system
-# component needs. `kube-system` gets NO policy (see below). Application
-# namespaces use the same deny-all + targeted-allow pattern — see the
-# ansible-k3s README "Securing a new namespace" tutorial.
+# egress in two namespaces, then re-open only the minimal egress each system
+# component needs. `kube-system` gets NO policy (see below). The Ceph operator
+# namespace (ceph-csi-operator-system) is handled separately by
+# 56-ceph-network-policies.yml.j2 (same pattern, co-located with the Ceph CSI
+# group 50-56). Application namespaces use the same deny-all + targeted-allow
+# pattern — see the ansible-k3s README "Securing a new namespace" tutorial.
 #
 # Why deny-all-both here (and not just ingress)? The previous baseline left
 # egress open; zero-trust closes outbound too, so a compromised pod in these
@@ -30,12 +32,12 @@
 #                   which runs as a host process (not a pod) — that traffic is also
 #                   node-originated and therefore exempt, so the deny-ingress below
 #                   does NOT break webhook validation.
-#   - hostNetwork:  kube-router does NOT enforce NP on hostNetwork pods. The Ceph
-#                   CSI node plugins and the MetalLB speakers run hostNetwork, so the
-#                   ceph-csi-operator-system / metallb-system policies only apply to
-#                   the operator/controller/provisioner pods (which is what we protect
-#                   — they hold the Ceph Secret / drive provisioning / manage
-#                   allocations), not to the speakers/node plugins themselves.
+#   - hostNetwork:  kube-router does NOT enforce NP on hostNetwork pods. The MetalLB
+#                   speakers run hostNetwork, so the metallb-system policy only
+#                   applies to the controller (which is what we protect — it does
+#                   leader election / watch / allocation), not to the speakers
+#                   themselves. (The Ceph CSI node plugins are likewise hostNetwork;
+#                   their namespace policy lives in 56-ceph-network-policies.yml.j2.)
 # ============================================================
 
 # 1. default — strict quarantine. A pod that lands here can only resolve DNS;
@@ -112,87 +114,6 @@ kind: NetworkPolicy
 metadata:
   name: allow-egress-dns
   namespace: metallb-system
-spec:
-  podSelector: {}
-  policyTypes:
-    - Egress
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
----
-# 3. ceph-csi-operator-system — deny all, then let the operator + provisioner
-#    (ctrlplugin) reach the Ceph cluster, the API server and DNS. The CSI
-#    provisioner connects to the Ceph monitors AND to the OSDs directly (after
-#    fetching the OSD map), so the allow targets the whole ceph_subnet, not just
-#    the monitor IPs. Ports: mon msgr2 3300, mon msgr1 6789, OSDs/mgrs 6800-7300
-#    (endPort — supported by kube-router). Node plugins run hostNetwork (not
-#    enforced); this protects the operator + ctrlplugin, which hold the Ceph
-#    Secret and drive RBD/CephFS provisioning.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: default-deny-all
-  namespace: ceph-csi-operator-system
-spec:
-  podSelector: {}
-  policyTypes:
-    - Ingress
-    - Egress
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-egress-ceph
-  namespace: ceph-csi-operator-system
-spec:
-  podSelector: {}
-  policyTypes:
-    - Egress
-  egress:
-    - to:
-        - ipBlock:
-            cidr: {{ ceph_subnet }}
-      ports:
-        - protocol: TCP
-          port: 3300
-        - protocol: TCP
-          port: 6789
-        - protocol: TCP
-          port: 6800
-          endPort: 7300
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-egress-kubeapi
-  namespace: ceph-csi-operator-system
-spec:
-  podSelector: {}
-  policyTypes:
-    - Egress
-  egress:
-    - to:
-        - ipBlock:
-            cidr: {{ node_cidr }}
-      ports:
-        - protocol: TCP
-          port: 6443
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-egress-dns
-  namespace: ceph-csi-operator-system
 spec:
   podSelector: {}
   policyTypes:

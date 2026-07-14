@@ -116,7 +116,7 @@ ceph_monitors:
 
 # CIDR of the Ceph (storage) network. The CSI provisioner connects to the
 # monitors AND to the OSDs directly (after fetching the OSD map), so the
-# baseline NetworkPolicy (templates/11-network-policies.yml.j2) allows egress
+# Ceph NetworkPolicy (templates/56-ceph-network-policies.yml.j2) allows egress
 # to this whole subnet on the Ceph ports (3300 / 6789 / 6800-7300) rather than
 # only to the monitor IPs. Must cover monitors + OSDs + mgrs.
 ceph_subnet: "192.168.1.0/24"
@@ -313,24 +313,39 @@ smb_shares:
 k3s_server_manifests_urls:
   - url: "https://raw.githubusercontent.com/metallb/metallb/{{ metallb_version }}/config/manifests/metallb-native.yaml"
     filename: 03-metallb-native.yaml
-  - url: "https://raw.githubusercontent.com/ceph/ceph-csi-operator/{{ ceph_csi_operator_version }}/deploy/multifile/crd.yaml"
-    filename: 07-ceph-csi-operator-crd.yaml
-  - url: "https://raw.githubusercontent.com/ceph/ceph-csi-operator/{{ ceph_csi_operator_version }}/deploy/multifile/csi-rbac.yaml"
-    filename: 08-ceph-csi-operator-rbac.yaml
-  - url: "https://raw.githubusercontent.com/ceph/ceph-csi-operator/{{ ceph_csi_operator_version }}/deploy/multifile/operator.yaml"
-    filename: 09-ceph-csi-operator.yaml
 
 # Manifests rendered from Jinja2 templates and placed in /var/lib/rancher/k3s/server/manifests/
 k3s_server_manifests_templates:
   - 01-kube-vip-rbac.yml.j2
   - 02-kube-vip-daemonset.yml.j2
   - 04-metallb-config.yml.j2
-  - 05-ceph-secrets.yml.j2
-  - 06-ceph-storageclasses.yml.j2
-  - 10-ceph-csi-operator-config.yml.j2
   - 11-network-policies.yml.j2
   - 12-traefik-config.yml.j2
   - 13-pod-security.yml.j2
+
+# ------------------------------------------------------------
+# Ceph CSI manifests (always-on primary storage, own group 50-56)
+# ------------------------------------------------------------
+# Ceph is the primary storage backend and is always deployed (no *_enabled
+# flag, unlike NFS/SMB). It lives in its own self-contained group like the
+# optional drivers below: site.yml (pre_tasks) appends these lists to
+# k3s_server_manifests_* unconditionally. The NetworkPolicy for the Ceph
+# operator namespace ships here too (56-), after the operator (54-) which
+# creates that namespace — so the namespace exists when the NP is applied.
+# K3s auto-deploy is fire-and-forget in filename order, so 54-before-56 matters.
+ceph_manifest_urls:
+  - url: "https://raw.githubusercontent.com/ceph/ceph-csi-operator/{{ ceph_csi_operator_version }}/deploy/multifile/crd.yaml"
+    filename: 52-ceph-csi-operator-crd.yaml
+  - url: "https://raw.githubusercontent.com/ceph/ceph-csi-operator/{{ ceph_csi_operator_version }}/deploy/multifile/csi-rbac.yaml"
+    filename: 53-ceph-csi-operator-rbac.yaml
+  - url: "https://raw.githubusercontent.com/ceph/ceph-csi-operator/{{ ceph_csi_operator_version }}/deploy/multifile/operator.yaml"
+    filename: 54-ceph-csi-operator.yaml
+
+ceph_manifest_templates:
+  - 50-ceph-secrets.yml.j2
+  - 51-ceph-storageclasses.yml.j2
+  - 55-ceph-csi-operator-config.yml.j2
+  - 56-ceph-network-policies.yml.j2
 
 # ------------------------------------------------------------
 # Optional CSI driver manifests (NFS / SMB)
@@ -339,31 +354,41 @@ k3s_server_manifests_templates:
 # k3s_server_manifests_templates by default. site.yml (pre_tasks) appends them
 # to those lists only when the matching *_enabled flag is true. Inline {% if %}
 # is not valid inside a YAML list in a vars file, which is why the conditional
-# composition happens in the playbook rather than here. Keep the filenames
-# numbered to slot after the baseline (network-policies = 11).
+# composition happens in the playbook rather than here.
+#
+# Manifest numbering (no overlap between ranges, all land in the same
+# /var/lib/rancher/k3s/server/manifests/ dir, applied in filename order):
+#   01-13  baseline (kube-vip, MetalLB, network policies, Traefik, Pod Security)
+#           -> k3s_server_manifests_*
+#   20-26  cert-manager (url 20-21 + templates 22-26)
+#   30-34  NFS CSI (url 30-33 + StorageClasses 34)
+#   40-44  SMB CSI (url 40-43 + StorageClasses 44)
+#   50-56  Ceph CSI (url 52-54 + templates 50,51,55,56) — always-on
+# Within a range the driver/CRDs come before the StorageClasses/policies that
+# depend on them.
 nfs_manifest_urls:
   - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/{{ nfs_csi_version }}/deploy/{{ nfs_csi_version }}/rbac-csi-nfs.yaml"
-    filename: 12-nfs-rbac.yaml
+    filename: 30-nfs-rbac.yaml
   - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/{{ nfs_csi_version }}/deploy/{{ nfs_csi_version }}/csi-nfs-driverinfo.yaml"
-    filename: 13-nfs-driverinfo.yaml
+    filename: 31-nfs-driverinfo.yaml
   - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/{{ nfs_csi_version }}/deploy/{{ nfs_csi_version }}/csi-nfs-controller.yaml"
-    filename: 14-nfs-controller.yaml
+    filename: 32-nfs-controller.yaml
   - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/{{ nfs_csi_version }}/deploy/{{ nfs_csi_version }}/csi-nfs-node.yaml"
-    filename: 15-nfs-node.yaml
+    filename: 33-nfs-node.yaml
 nfs_manifest_templates:
-  - 20-nfs-storageclasses.yml.j2
+  - 34-nfs-storageclasses.yml.j2
 
 smb_manifest_urls:
   - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/{{ smb_csi_version }}/deploy/{{ smb_csi_version }}/rbac-csi-smb.yaml"
-    filename: 16-smb-rbac.yaml
+    filename: 40-smb-rbac.yaml
   - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/{{ smb_csi_version }}/deploy/{{ smb_csi_version }}/csi-smb-driver.yaml"
-    filename: 17-smb-driver.yaml
+    filename: 41-smb-driver.yaml
   - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/{{ smb_csi_version }}/deploy/{{ smb_csi_version }}/csi-smb-controller.yaml"
-    filename: 18-smb-controller.yaml
+    filename: 42-smb-controller.yaml
   - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/{{ smb_csi_version }}/deploy/{{ smb_csi_version }}/csi-smb-node.yaml"
-    filename: 19-smb-node.yaml
+    filename: 43-smb-node.yaml
 smb_manifest_templates:
-  - 21-smb-storageclasses.yml.j2
+  - 44-smb-storageclasses.yml.j2
 
 # ------------------------------------------------------------
 # Optional cert-manager manifests
@@ -375,14 +400,14 @@ smb_manifest_templates:
 # (computed in site.yml from certmanager_dns_credentials).
 certmanager_manifest_urls:
   - url: "https://github.com/cert-manager/cert-manager/releases/download/{{ certmanager_version }}/cert-manager.yaml"
-    filename: 30-cert-manager.yaml
+    filename: 20-cert-manager.yaml
 certmanager_manifest_templates:
-  - 33-certmanager-dns-secrets.yml.j2
-  - 34-certmanager-issuers.yml.j2
-  - 35-certmanager-network-policies.yml.j2
-  - 36-certmanager-webhook-secret-reader.yml.j2
+  - 23-certmanager-dns-secrets.yml.j2
+  - 24-certmanager-issuers.yml.j2
+  - 25-certmanager-network-policies.yml.j2
+  - 26-certmanager-webhook-secret-reader.yml.j2
 certmanager_webhook_ovh_templates:
-  - 32-certmanager-webhook-ovh.yml.j2
+  - 22-certmanager-webhook-ovh.yml.j2
 certmanager_webhook_infomaniak_urls:
   - url: "https://github.com/Infomaniak/cert-manager-webhook-infomaniak/releases/download/{{ certmanager_webhook_infomaniak_version }}/rendered-manifest.yaml"
-    filename: 31-certmanager-webhook-infomaniak.yaml
+    filename: 21-certmanager-webhook-infomaniak.yaml

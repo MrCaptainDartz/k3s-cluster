@@ -373,20 +373,33 @@ ansible-k3s/
     ├── 01-kube-vip-rbac.yml.j2          # Manifest files injected by the role
     ├── 02-kube-vip-daemonset.yml.j2
     ├── 04-metallb-config.yml.j2
-    ├── 05-ceph-secrets.yml.j2
-    ├── 06-ceph-storageclasses.yml.j2
-    ├── 10-ceph-csi-operator-config.yml.j2
-    ├── 11-network-policies.yml.j2        # Baseline NetworkPolicies (kube-router netpol)
+    ├── 11-network-policies.yml.j2        # Baseline NetworkPolicies for default + metallb-system (kube-router netpol)
     ├── 12-traefik-config.yml.j2          # HelmChartConfig customizing the K3s-packaged Traefik
     ├── 13-pod-security.yml.j2            # Pod Security Standards: enforce=baseline on `default`
-    ├── 20-nfs-storageclasses.yml.j2       # NFS CSI StorageClasses, one per nfs_shares entry (only if nfs_enabled)
-    ├── 21-smb-storageclasses.yml.j2       # SMB CSI StorageClasses, one per smb_shares entry (only if smb_enabled)
-    ├── 32-certmanager-webhook-ovh.yml.j2  # HelmChart CR installing the OVH DNS-01 webhook (only if an OVH cred exists)
-    ├── 33-certmanager-dns-secrets.yml.j2  # DNS provider credential Secrets (only if certmanager_enabled)
-    ├── 34-certmanager-issuers.yml.j2     # Let's Encrypt ClusterIssuers, multi-provider DNS-01 (only if certmanager_enabled)
-    ├── 35-certmanager-network-policies.yml.j2 # cert-manager namespace deny-all + explicit allows (only if certmanager_enabled)
-    └── 36-certmanager-webhook-secret-reader.yml.j2 # Role+RoleBinding letting OVH/Infomaniak webhooks read their cred Secrets (only if certmanager_enabled)
+    ├── 22-certmanager-webhook-ovh.yml.j2  # HelmChart CR installing the OVH DNS-01 webhook (only if an OVH cred exists)
+    ├── 23-certmanager-dns-secrets.yml.j2  # DNS provider credential Secrets (only if certmanager_enabled)
+    ├── 24-certmanager-issuers.yml.j2     # Let's Encrypt ClusterIssuers, multi-provider DNS-01 (only if certmanager_enabled)
+    ├── 25-certmanager-network-policies.yml.j2 # cert-manager namespace deny-all + explicit allows (only if certmanager_enabled)
+    ├── 26-certmanager-webhook-secret-reader.yml.j2 # Role+RoleBinding letting OVH/Infomaniak webhooks read their cred Secrets (only if certmanager_enabled)
+    ├── 34-nfs-storageclasses.yml.j2       # NFS CSI StorageClasses, one per nfs_shares entry (only if nfs_enabled)
+    ├── 44-smb-storageclasses.yml.j2       # SMB CSI StorageClasses, one per smb_shares entry (only if smb_enabled)
+    ├── 50-ceph-secrets.yml.j2            # Ceph client key Secret (always-on, group 50-56)
+    ├── 51-ceph-storageclasses.yml.j2     # RBD + CephFS StorageClasses
+    ├── 55-ceph-csi-operator-config.yml.j2 # Driver / CephConnection / ClientProfile CRs
+    └── 56-ceph-network-policies.yml.j2   # ceph-csi-operator-system deny-all + targeted egress
 ```
+
+> The `.j2` files above are rendered by the role; the **URL** manifests (MetalLB native, ceph-csi-operator CRD/RBAC/operator, the NFS/SMB driver manifests, `cert-manager.yaml`, the Infomaniak webhook) are downloaded directly into the same `/var/lib/rancher/k3s/server/manifests/` dir. They all share one numbering scheme with **no overlap between ranges**, applied in filename order:
+>
+> | Range   | Component | Source |
+> | ------- | --------- | ------ |
+> | `01-13` | baseline (kube-vip, MetalLB, network policies, Traefik, Pod Security) | templates + URLs |
+> | `20-26` | cert-manager (cert-manager + Infomaniak/OVH webhooks + DNS secrets/issuers/NPs) | URLs 20-21 + templates 22-26 |
+> | `30-34` | NFS CSI (RBAC/driverinfo/controller/node + StorageClasses) | URLs 30-33 + template 34 |
+> | `40-44` | SMB CSI (RBAC/driver/controller/node + StorageClasses) | URLs 40-43 + template 44 |
+> | `50-56` | Ceph CSI (secrets, StorageClasses, operator CRD/RBAC/deploy, config, NP) | URLs 52-54 + templates 50,51,55,56 |
+>
+> Within each range the driver/CRDs precede the StorageClasses/policies that depend on them. cert-manager sits right after the baseline; the three CSI drivers (NFS/SMB/Ceph) are grouped together after it. Ceph is the always-on primary storage (no `*_enabled` flag); NFS/SMB/cert-manager are opt-in.
 
 ## Backups (etcd snapshots)
 
@@ -417,7 +430,7 @@ Complementing the network zero-trust baseline, the auto-deployed manifest `13-po
 | --------- | --------- | ---------------- | ------ |
 | `default` | `baseline` | `restricted` | Rejects privileged / `hostPath` / `hostNetwork` / `hostPID` / all-capabilities pods; logs+warns (does **not** block) pods that could be hardened to `restricted`. `default` is the strict-quarantine namespace (no real app belongs here), so `baseline` breaks nothing while closing escape vectors. |
 | `cert-manager` (when enabled) | `baseline` | `restricted` | Same hardening: cert-manager's pods (controller/webhook/cainjector + the OVH webhook) are all plain pods (no `privileged`/`hostNetwork`/`hostPath`), so `baseline` breaks nothing and adds defense-in-depth on a namespace that already has a deny-all NetworkPolicy. |
-| `cert-manager-infomaniak` (when an Infomaniak cred exists) | `baseline` | `restricted` | Same: the Infomaniak webhook runs here (separate namespace, created by its rendered-manifest); it is a plain pod, so `baseline` is safe. Pre-created with labels by `13-`, then patched by `31-`. |
+| `cert-manager-infomaniak` (when an Infomaniak cred exists) | `baseline` | `restricted` | Same: the Infomaniak webhook runs here (separate namespace, created by its rendered-manifest); it is a plain pod, so `baseline` is safe. Pre-created with labels by `13-`, then patched by `21-`. |
 | `kube-system`, `metallb-system`, `ceph-csi-operator-system` | — (unlabelled) | — | **Intentionally exempt**: these hold system pods that legitimately need `privileged`/`hostNetwork` (kube-vip, Traefik, MetalLB speakers, CSI node plugins). K3s sets no cluster-wide default profile, so unlabelled = no enforcement. |
 
 `restricted` is **not** enforced anywhere automatically — too many images do not comply (`runAsNonRoot`, `seccomp=RuntimeDefault`) and it would turn the baseline into friction. Opt into it **per sensitive namespace** when you create one.
@@ -437,20 +450,20 @@ kubectl -n default run pss-test --image=busybox --privileged --restart=Never -- 
 
 ## Network policies
 
-No policies are applied by default, so the pod network is flat: every pod can reach every pod, across all namespaces. The auto-deployed manifest `11-network-policies.yml.j2` installs a **zero-trust** cluster baseline: **deny all ingress AND egress** in three namespaces, then re-open only the minimal egress each system component needs. `kube-system` deliberately gets **no policy** (its critical components — CoreDNS, kube-proxy, metrics-server, Traefik, kube-vip — need broad connectivity and run partly `hostNetwork`; locking it down on K3s is risky and out of scope for this baseline).
+No policies are applied by default, so the pod network is flat: every pod can reach every pod, across all namespaces. The auto-deployed manifest `11-network-policies.yml.j2` installs a **zero-trust** cluster baseline: **deny all ingress AND egress** in two namespaces (`default`, `metallb-system`), then re-open only the minimal egress each system component needs. The Ceph operator namespace (`ceph-csi-operator-system`) gets the same treatment from `56-ceph-network-policies.yml.j2`, shipped with the Ceph CSI group (50-56) so the whole Ceph stack is self-contained. `kube-system` deliberately gets **no policy** (its critical components — CoreDNS, kube-proxy, metrics-server, Traefik, kube-vip — need broad connectivity and run partly `hostNetwork`; locking it down on K3s is risky and out of scope for this baseline).
 
 | Namespace                  | Ingress      | Egress re-opened                                                                                                   | Why                                                                                                        |
 | -------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
 | `default` (strict quarantine) | deny all  | DNS :53 (UDP/TCP) to `kube-dns` only                                                                              | A pod landing in `default` can resolve names but nothing else — cannot be reached, cannot phone home. Deploy real apps in a dedicated namespace, not `default`. |
-| `ceph-csi-operator-system` | deny all     | Ceph `ceph_subnet` on 3300 / 6789 / 6800-7300 (`endPort`), API `node_cidr:6443`, DNS :53                            | The CSI provisioner connects to the Ceph monitors AND the OSDs directly (after fetching the OSD map), so egress targets the whole Ceph subnet. Protects the operator + ctrlplugin (hold the Ceph Secret / drive provisioning). |
 | `metallb-system`           | deny all     | API `node_cidr:6443`, DNS :53                                                                                      | The controller does leader-election + watch via the API server. Speakers run `hostNetwork` (not enforced); the webhook is served to the kube-apiserver (node-origin, exempt — see below). |
+| `ceph-csi-operator-system` (`56-`) | deny all     | Ceph `ceph_subnet` on 3300 / 6789 / 6800-7300 (`endPort`), API `node_cidr:6443`, DNS :53                            | The CSI provisioner connects to the Ceph monitors AND the OSDs directly (after fetching the OSD map), so egress targets the whole Ceph subnet. Protects the operator + ctrlplugin (hold the Ceph Secret / drive provisioning). |
 | `kube-system`              | **none**     | —                                                                                                                  | Left open by design (critical components; partly `hostNetwork`). See note above.                           |
 
 This is the **cluster baseline** (system + quarantine namespaces): deny-all-both + targeted egress. **Application namespaces** use the same deny-all + explicit-allow pattern, applied per namespace; see [Securing a new namespace (step by step)](#securing-a-new-namespace-step-by-step).
 
 What is **not** affected / **not** enforced:
 
-- **DNS** — pods in the three guarded namespaces reach `kube-dns` because DNS egress is explicitly re-opened above; `kube-system` itself has no deny, so CoreDNS keeps serving.
+- **DNS** — pods in the guarded namespaces reach `kube-dns` because DNS egress is explicitly re-opened above; `kube-system` itself has no deny, so CoreDNS keeps serving.
 - **Probes** — kubelet liveness/readiness probes (node-to-pod traffic) are exempt from NetworkPolicy; node-originated traffic is not enforced.
 - **Admission webhooks** — the cert-manager and MetalLB validating webhooks are called by the kube-apiserver, which runs as a host process (not a pod). That traffic is node-originated and therefore exempt, so the deny-ingress above does **not** break webhook validation (no separate ingress allow needed for the webhook itself).
 - **`hostNetwork` pods** — kube-router intentionally skips pods running with `hostNetwork: true`, as does the upstream Kubernetes model. The **Ceph CSI node plugins** and the **MetalLB speakers** both run in `hostNetwork`, so the policies on `ceph-csi-operator-system` and `metallb-system` only really apply to the operator/controller/provisioner pods (which is what we want to protect). Don't rely on these policies to isolate the speakers/plugins themselves: they share the node's network namespace.
