@@ -80,10 +80,111 @@ spec:
       interval: {{ observability_scrape_interval }}
 {% endif %}
 ---
-# MetalLB controller (metallb-system). Container declares port "metricshttps":9120 and
-# serves Prometheus metrics over HTTPS at /metrics (same port as the webhook). PodMonitor
-# on the named port with scheme https + insecureSkipVerify (self-signed webhook cert).
-# The 11- NP must allow :9120 (not :7473) for the scrape to reach it.
+# MetalLB controller (metallb-system). Since MetalLB v0.16 the kube-rbac-proxy sidecar
+# was removed: :9120 (container port "metricshttps") serves /metrics DIRECTLY over HTTPS
+# with the self-signed webhook cert (CN=127.0.0.1) AND enforces bearer-token auth
+# (TokenReview + SubjectAccessReview on the nonResourceURL /metrics). So the scrape needs
+# BOTH tlsConfig.insecureSkipVerify (cert is NOT valid for the pod IP) AND a bearer token
+# from a ServiceAccount allowed to GET /metrics — without the token you get 401, with the
+# token but no tlsConfig you get a cert-verify failure. insecureSkipVerify MUST sit under
+# tlsConfig: a bare endpoint-level field is silently dropped by the operator (not part of
+# the endpoint schema). metallb is a raw manifest (K3s Addon 03-metallb-native) with no
+# chart-provided metrics RBAC, so the reader SA + long-lived token Secret + ClusterRole
+# (/metrics get) are created here, in the PodMonitor's namespace (the operator reads the
+# authorization Secret from the PodMonitor namespace). The 11- NP must allow :9120 (not
+# :7473) for the scrape to reach it. Pattern mirrored from the upstream metallb chart
+# (templates/podmonitor.yaml, PR #3081).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: metallb-metrics-reader
+  namespace: {{ observability_namespace }}
+  labels:
+    app.kubernetes.io/name: metallb
+    app.kubernetes.io/component: metrics-reader
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: metallb-metrics-token
+  namespace: {{ observability_namespace }}
+  labels:
+    app.kubernetes.io/name: metallb
+    app.kubernetes.io/component: metrics-reader
+  annotations:
+    kubernetes.io/service-account.name: metallb-metrics-reader
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: metallb-metrics-reader
+  labels:
+    app.kubernetes.io/name: metallb
+    app.kubernetes.io/component: metrics-reader
+rules:
+  - nonResourceURLs:
+      - /metrics
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metallb-metrics-reader
+  labels:
+    app.kubernetes.io/name: metallb
+    app.kubernetes.io/component: metrics-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: metallb-metrics-reader
+subjects:
+  - kind: ServiceAccount
+    name: metallb-metrics-reader
+    namespace: {{ observability_namespace }}
+---
+# MetalLB v0.16 metrics auth (part 2): the controller validates the bearer token via
+# TokenReview + SubjectAccessReview. The K3s-packaged 03-metallb-native Addon ships a
+# STALE pre-v0.16 RBAC manifest that does NOT grant the controller SA `create` on
+# tokenreviews/subjectaccessreviews — so the v0.16.1 image tries to authenticate the
+# scraper, fails to create the TokenReview (403 at the API), and returns HTTP 500 to
+# the scraper. metallb is a raw manifest (not Helm) so its Addon RBAC can't be edited
+# (rewritten on reboot); instead we supplement it with this ClusterRole+Binding, gated
+# on observability_enabled. This mirrors the upstream chart's controller ClusterRole
+# (templates/rbac.yaml: tokenreviews + subjectaccessreviews create).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: metallb-controller-authreviews
+  labels:
+    app.kubernetes.io/name: metallb
+    app.kubernetes.io/component: metrics-reader
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metallb-controller-authreviews
+  labels:
+    app.kubernetes.io/name: metallb
+    app.kubernetes.io/component: metrics-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: metallb-controller-authreviews
+subjects:
+  - kind: ServiceAccount
+    name: controller
+    namespace: metallb-system
+---
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
@@ -100,13 +201,12 @@ spec:
   podMetricsEndpoints:
     - port: metricshttps
       scheme: https
-      # metallb's :9120 serves the SAME self-signed webhook cert (CN=127.0.0.1),
-      # so HTTPS scrape cert verification fails (cert is NOT valid for the pod IP).
-      # insecureSkipVerify MUST sit under tlsConfig: — a bare endpoint-level
-      # insecureSkipVerify is silently dropped by the operator (the field is not
-      # part of the endpoint schema), so the scrape TLS-verifies and fails.
       tlsConfig:
         insecureSkipVerify: true
+      authorization:
+        credentials:
+          name: metallb-metrics-token
+          key: token
       interval: {{ observability_scrape_interval }}
 ---
 # ceph-csi-operator (ceph-csi-operator-system). The operator pod's selector label is
