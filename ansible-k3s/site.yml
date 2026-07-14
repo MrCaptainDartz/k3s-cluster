@@ -440,3 +440,30 @@
       when:
         - inventory_hostname == (groups['k3s_cluster'] | first)
         - observability_enabled | bool
+
+    # ------------------------------------------------------------
+    # Kubeconfig for ansible_user
+    # ------------------------------------------------------------
+    - name: Check if k3s kubeconfig exists on node
+      ansible.builtin.stat:
+        path: /etc/rancher/k3s/k3s.yaml
+      register: k3s_kubeconfig
+
+    - name: Create .kube directory for ansible_user
+      ansible.builtin.file:
+        path: "~{{ ansible_user }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0750'
+      when: k3s_kubeconfig.stat.exists
+
+    - name: Copy k3s kubeconfig to ansible_user profile
+      ansible.builtin.copy:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "~{{ ansible_user }}/.kube/config"
+        remote_src: yes
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+      when: k3s_kubeconfig.stat.exists

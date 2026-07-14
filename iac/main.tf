@@ -79,6 +79,7 @@ resource "proxmox_virtual_environment_vm" "ubuntu_vm" {
     interface    = "scsi0"
     size         = var.vm_disk_size_gb
     discard      = "on"
+    ssd          = true
   }
 
   # Dynamic network interfaces
