@@ -239,12 +239,12 @@ Here are some important variables based on the provided examples:
 
 | Variable              | Example                                | Explanation                                                            |
 | --------------------- | -------------------------------------- | ---------------------------------------------------------------------- |
-| `k3s_release_version` | `stable`                               | K3s version to deploy (can be a specific release like `v1.31.2+k3s1`). |
+| `k3s_release_version` | `v1.36.2+k3s1`                         | Pinned K3s release (not the `stable` channel, which silently bumps Traefik's chart and breaks the HelmChartConfig). Bump deliberately and re-test. |
 | `k3s_etcd_snapshot_cron` | `0 */6 * * *`                        | Cron expression for scheduled etcd snapshots (embedded etcd only).   |
 | `k3s_etcd_snapshot_retention` | `28`                         | Snapshots retained per control-plane node (≈ 7 days at 6 h intervals). |
 | `coredns_replicas`    | `3`                                    | CoreDNS replica count, re-asserted by a `post_tasks` step (no K3s flag exists; K3s v1.25.5+ doesn't pin replicas so the scale persists). `topologySpreadConstraints` spread pods one-per-node → HA. See "CoreDNS high availability". |
 | `k3s_vip`             | `192.168.1.10`                         | The target IP for kube-vip. This IP must be available on the network.  |
-| `k3s_vip_interface`   | `{{ ansible_default_ipv4.interface }}` | On which network interface to share the VIP.                           |
+| `k3s_vip_interface`   | `` (empty = auto)                     | Interface announcing the VIP. Empty -> auto-resolved by a `pre_task` to the interface whose subnet matches `node_cidr` (multi-NIC safe — does not rely on the default-route interface). Set a name explicitly to override. |
 | `node_cidr`           | `192.168.1.0/24`                       | Node-network CIDR (control planes + workers); used by the cert-manager NetworkPolicy (apiserver ingress/API egress). |
 | `metallb_ip_range`    | `192.168.1.150-192.168.1.199`          | The IP range dynamically assigned by MetalLB to your applications.     |
 | `traefik_lb_ip`       | `192.168.1.199`                        | Fixed MetalLB IP pinned to Traefik's LoadBalancer Service (must be within `metallb_ip_range`). |
@@ -261,8 +261,8 @@ Here are some important variables based on the provided examples:
 | `certmanager_dns_credentials` | `[…]`                            | Per-provider DNS creds (Cloudflare/OVH/Infomaniak), each routed by `match_domains`; tokens are **vault-protected**. See `all.yml.example`. |
 | `certmanager_webhook_group_ovh` | `acme.myhomelab.example`        | OVH webhook `groupName` (must match the issuer); unique to you. |
 | `cephfs_subvolumegroup` | `csi`                                | The CephFS subvolume group used by the CephFS driver (must exist in Ceph). |
-| `ceph_sc_rbd_name`    | `ceph-rbd`                             | Name of the RBD StorageClass (the `storageClassName` to reference in a PVC). |
-| `ceph_sc_cephfs_name` | `ceph-cephfs`                          | Name of the CephFS StorageClass (the `storageClassName` to reference in a PVC). |
+| `ceph_sc_rbd_name`    | `ceph-rbd`                             | Name of the RBD StorageClass (the cluster default; `reclaimPolicy: Delete`). |
+| `ceph_sc_cephfs_name` | `ceph-cephfs`                          | Name of the CephFS StorageClass (`reclaimPolicy: Retain` — the subvolume survives an accidental PVC deletion; clean up orphaned subvolumes manually). |
 | `nfs_enabled`         | `false`                                | Deploy the NFS CSI driver + one StorageClass per entry in `nfs_shares`. `false` = nothing is installed. |
 | `nfs_csi_version`     | `v4.13.4`                              | Release tag of `kubernetes-csi/csi-driver-nfs` (raw manifests pulled from this tag). |
 | `nfs_shares`          | `[{name, server, share}]`              | One StorageClass per share (cluster-scoped, named after the share); `name` is the `storageClassName` to reference in a PVC. |
@@ -277,7 +277,7 @@ The versions below are the ones currently pinned in `inventory/group_vars/all.ym
 
 | Component               | Variable                  | Version  |
 | ----------------------- | ------------------------- | -------- |
-| K3s (channel)           | `k3s_release_version`     | `stable` |
+| K3s (pinned)            | `k3s_release_version`     | `v1.36.2+k3s1` |
 | kube-vip                | `kube_vip_version`        | `v1.2.1` |
 | MetalLB                 | `metallb_version`         | `v0.16.1`|
 | Traefik (packaged with K3s) | follows `k3s_release_version` | Traefik **v3** on K3s v1.32+ (chart v39); v2 on v1.31 and earlier |
@@ -288,7 +288,7 @@ The versions below are the ones currently pinned in `inventory/group_vars/all.ym
 | OVH DNS webhook (optional) | `certmanager_webhook_ovh_chart_version` | `0.9.14` (aureq chart) |
 | Infomaniak DNS webhook (optional) | `certmanager_webhook_infomaniak_version` | `v0.3.1` |
 
-> K3s follows the `stable` channel, which is a moving target. For stricter reproducibility you may pin a specific release (e.g. `v1.31.2+k3s1`) instead.
+> K3s is **pinned** to a specific release (`v1.36.2+k3s1`) rather than the moving `stable` channel, so a K3s bump (which silently changes the bundled Traefik chart version) is a deliberate, tested change.
 
 ### 3. Run the deployment
 
@@ -781,7 +781,7 @@ spec:
 
 ## Verification
 
-To check the health of the deployed component, you can run these queries:
+`site.yml` already **fails fast on a broken deploy**: `post_tasks` on the first control plane wait for the key platform components to roll out — Traefik (DaemonSet), the MetalLB controller, the ceph-csi-operator, cert-manager (when enabled) and the NFS/SMB controllers (when enabled). A manifest that fails to apply or a pod that never becomes Ready now fails the playbook instead of reporting success. The commands below are for manual, deeper checks after a successful run.
 
 ```bash
 # Retrieve the remote configuration file for kubectl

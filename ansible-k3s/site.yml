@@ -3,6 +3,37 @@
   hosts: k3s_cluster
   gather_facts: true
   pre_tasks:
+    # Resolve the node interface that carries the kube-vip VIP. The default in
+    # all.yml is empty ("") -> auto-detect here, which is robust on multi-NIC
+    # nodes: we pick the interface whose IPv4 network matches node_cidr (the
+    # VIP's network) instead of relying on ansible_default_ipv4.interface (the
+    # default-route interface, which can be a separate storage NIC). The role
+    # consumes k3s_vip_interface when rendering the kube-vip DaemonSet, so this
+    # must run before the role. A non-empty explicit value in all.yml overrides
+    # this whole block (the when guards skip it).
+    - name: Auto-resolve the kube-vip interface from the VIP subnet
+      ansible.builtin.set_fact:
+        k3s_vip_interface: "{{ item.device }}"
+      loop: >-
+        {{
+          ansible_facts.interfaces
+          | map('extract', ansible_facts)
+          | selectattr('ipv4', 'defined')
+          | selectattr('ipv4.network', 'defined')
+          | list
+        }}
+      when:
+        - k3s_vip_interface | length == 0
+        - item.ipv4.network == (node_cidr | ipaddr('network'))
+
+    - name: Fail if the kube-vip interface could not be resolved
+      ansible.builtin.fail:
+        msg: >-
+          Could not find a node interface whose subnet contains the kube-vip
+          network (node_cidr={{ node_cidr }}, k3s_vip={{ k3s_vip }}). Set
+          k3s_vip_interface explicitly in inventory/group_vars/all.yml.
+      when: k3s_vip_interface | length == 0
+
     # Compose the K3s auto-deploy manifest lists with the optional NFS/SMB CSI
     # drivers. Inline {% if %} is not valid inside a YAML list in a vars file,
     # so the conditional appends are done here: host-scoped facts override the
@@ -105,3 +136,128 @@
       when:
         - inventory_hostname == (groups['k3s_cluster'] | first)
         - (coredns_current_replicas.stdout | int) != (coredns_replicas | int)
+
+    # ------------------------------------------------------------
+    # Post-deploy verification — assert the key platform components actually
+    # came up, on the first control plane only. K3s auto-deploys manifests from
+    # /var/lib/rancher/k3s/server/manifests/, but those are fire-and-forget: a
+    # malformed manifest or a failing pod leaves the playbook reporting success.
+    # `kubectl rollout status` returns non-zero until the resource exists AND is
+    # rolled out, so each task retries until rc==0 (covers the existence race on
+    # a fresh deploy too). A failure here now fails the playbook — surfacing a
+    # real problem instead of a silent partial cluster.
+    # ------------------------------------------------------------
+    - name: Verify Traefik DaemonSet is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - daemonset/traefik
+          - -n
+          - kube-system
+          - --timeout=60s
+      changed_when: false
+      register: verify_traefik
+      retries: 15
+      delay: 5
+      until: verify_traefik.rc == 0
+      when: inventory_hostname == (groups['k3s_cluster'] | first)
+
+    - name: Verify MetalLB controller is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/controller
+          - -n
+          - metallb-system
+          - --timeout=60s
+      changed_when: false
+      register: verify_metallb
+      retries: 15
+      delay: 5
+      until: verify_metallb.rc == 0
+      when: inventory_hostname == (groups['k3s_cluster'] | first)
+
+    - name: Verify ceph-csi-operator is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/ceph-csi-operator
+          - -n
+          - ceph-csi-operator-system
+          - --timeout=60s
+      changed_when: false
+      register: verify_ceph_operator
+      retries: 15
+      delay: 5
+      until: verify_ceph_operator.rc == 0
+      when: inventory_hostname == (groups['k3s_cluster'] | first)
+
+    - name: Verify cert-manager deployments are available
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - wait
+          - --for=condition=Available
+          - deployment
+          - -n
+          - cert-manager
+          - --all
+          - --timeout=120s
+      changed_when: false
+      register: verify_certmanager
+      retries: 10
+      delay: 5
+      until: verify_certmanager.rc == 0
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - certmanager_enabled | bool
+
+    - name: Verify NFS CSI controller is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/csi-nfs-controller
+          - -n
+          - kube-system
+          - --timeout=60s
+      changed_when: false
+      register: verify_nfs
+      retries: 15
+      delay: 5
+      until: verify_nfs.rc == 0
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - nfs_enabled | bool
+
+    - name: Verify SMB CSI controller is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/csi-smb-controller
+          - -n
+          - kube-system
+          - --timeout=60s
+      changed_when: false
+      register: verify_smb
+      retries: 15
+      delay: 5
+      until: verify_smb.rc == 0
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - smb_enabled | bool

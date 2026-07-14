@@ -1,4 +1,8 @@
 ---
+# RBD (block) StorageClass — the cluster default. reclaimPolicy: Delete: block
+# volumes are typically ephemeral app data (caches, scratch, DB replicas); a
+# deleted PVC reclaims its Ceph image, keeping the pool tidy. Prefer Retain only
+# if you snapshot/backup important RBD PVCs explicitly.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -21,6 +25,12 @@ allowVolumeExpansion: true
 mountOptions:
   - discard
 ---
+# CephFS (shared filesystem) StorageClass. reclaimPolicy: Retain: a shared FS
+# commonly holds durable, human-valuable data (media, uploads, shared config).
+# Retain keeps the CephFS subvolume after a PVC is deleted, so an accidental PVC
+# deletion (a common operator footgun) does NOT destroy the data — the subvolume
+# survives as a Released PV and can be re-imported into a new PVC. The cost is
+# manual cleanup of orphaned subvolumes, an acceptable trade-off for safety.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -35,5 +45,5 @@ parameters:
   csi.storage.k8s.io/controller-expand-secret-namespace: ceph-csi-operator-system
   csi.storage.k8s.io/node-stage-secret-name: csi-cephfs-secret
   csi.storage.k8s.io/node-stage-secret-namespace: ceph-csi-operator-system
-reclaimPolicy: Delete
+reclaimPolicy: Retain
 allowVolumeExpansion: true

@@ -5,8 +5,11 @@
 
 k3s_api_port: "6443"
 
-# K3s version channel or specific version (e.g., "stable", "v1.31.2+k3s1")
-k3s_release_version: stable
+# K3s version. PINNED to a specific release (not the "stable" channel): the
+# stable channel is a moving target — a bump silently changes Traefik's chart
+# version (v2/v3, chart schema v39/v40), breaking the HelmChartConfig. Pinning
+# keeps the baseline reproducible. Bump deliberately and re-test the cluster.
+k3s_release_version: "v1.36.2+k3s1"
 
 # Use embedded etcd as the datastore (recommended for 3 control planes)
 k3s_etcd_datastore: true
@@ -43,7 +46,10 @@ k3s_server:
   tls-san:
     - "{{ k3s_vip }}"
   disable-cloud-controller: true
-  write-kubeconfig-mode: "0644"
+  # 0600 (owner-only): /etc/rancher/k3s/k3s.yaml holds the cluster admin cert,
+  # so it must NOT be world/group-readable. 0644 would let any local user become
+  # cluster admin.
+  write-kubeconfig-mode: "0600"
   flannel-backend: "host-gw"
   etcd-snapshot-schedule-cron: "{{ k3s_etcd_snapshot_cron }}"
   etcd-snapshot-retention: "{{ k3s_etcd_snapshot_retention }}"
@@ -68,8 +74,15 @@ coredns_replicas: 3
 # Virtual IP address for the K3s API server (must be free on the network)
 k3s_vip: "192.168.1.10"
 
-# Network interface on the nodes where the VIP will be announced (ARP mode)
-k3s_vip_interface: "{{ ansible_default_ipv4.interface }}"
+# Network interface on the nodes where the VIP will be announced (ARP mode).
+# Left empty ("") -> auto-resolved by a pre_task in site.yml to the interface
+# whose subnet matches node_cidr (the VIP's network). This is robust on
+# multi-NIC nodes: a node may carry a separate storage network (e.g. the Ceph
+# subnet), and ansible_default_ipv4.interface (the default-route interface) is
+# not guaranteed to be the one carrying the VIP — pinning the wrong NIC makes
+# kube-vip announce the VIP on the storage network and the API unreachable.
+# Set explicitly (e.g. "ens18") to override the auto-detection.
+k3s_vip_interface: ""
 
 # kube-vip container image and version
 kube_vip_image: "ghcr.io/kube-vip/kube-vip"
