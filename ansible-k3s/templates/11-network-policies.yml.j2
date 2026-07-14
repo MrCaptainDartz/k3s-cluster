@@ -132,8 +132,14 @@ spec:
         - protocol: TCP
           port: 53
 ---
-# Prometheus scrape allow (only if observability_enabled) — :9120 controller metrics
-# (metricshttps, served over HTTPS on the webhook port — NOT :7473).
+# Prometheus scrape allow (only if observability_enabled) — :9120 metrics
+# (metricshttps, served over HTTPS with the webhook cert — NOT :7473) for BOTH the
+# controller and the speaker, which both expose container port `metricshttps`:9120 with
+# the same v0.16 bearer-token auth. podSelector matches `app: metallb` so it covers
+# both components (controller: regular pod, enforced; speaker: hostNetwork, on which
+# kube-router does NOT enforce NP — see header — so the speaker is reachable via the
+# hostNetwork bypass regardless, but selecting it here is belt-and-suspenders in case
+# that ever changes).
 {% if observability_enabled | bool %}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -144,7 +150,6 @@ spec:
   podSelector:
     matchLabels:
       app: metallb
-      component: controller
   policyTypes:
     - Ingress
   ingress:

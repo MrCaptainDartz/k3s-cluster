@@ -145,19 +145,20 @@ subjects:
     name: metallb-metrics-reader
     namespace: {{ observability_namespace }}
 ---
-# MetalLB v0.16 metrics auth (part 2): the controller validates the bearer token via
-# TokenReview + SubjectAccessReview. The K3s-packaged 03-metallb-native Addon ships a
-# STALE pre-v0.16 RBAC manifest that does NOT grant the controller SA `create` on
-# tokenreviews/subjectaccessreviews — so the v0.16.1 image tries to authenticate the
-# scraper, fails to create the TokenReview (403 at the API), and returns HTTP 500 to
-# the scraper. metallb is a raw manifest (not Helm) so its Addon RBAC can't be edited
-# (rewritten on reboot); instead we supplement it with this ClusterRole+Binding, gated
-# on observability_enabled. This mirrors the upstream chart's controller ClusterRole
-# (templates/rbac.yaml: tokenreviews + subjectaccessreviews create).
+# MetalLB v0.16 metrics auth (part 2): controller AND speaker validate the bearer token
+# via TokenReview + SubjectAccessReview. The K3s-packaged 03-metallb-native Addon ships a
+# STALE pre-v0.16 RBAC manifest that does NOT grant the controller OR speaker SA `create`
+# on tokenreviews/subjectaccessreviews — so the v0.16.1 image tries to authenticate the
+# scraper, fails to create the TokenReview (403 at the API), and returns HTTP 500 to the
+# scraper (both controller and speaker hit this). metallb is a raw manifest (not Helm) so
+# its Addon RBAC can't be edited (rewritten on reboot); instead we supplement it with this
+# ClusterRole+Binding binding BOTH the controller and speaker SAs, gated on
+# observability_enabled. Mirrors upstream chart templates/rbac.yaml (tokenreviews +
+# subjectaccessreviews create) for both components.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: metallb-controller-authreviews
+  name: metallb-authreviews
   labels:
     app.kubernetes.io/name: metallb
     app.kubernetes.io/component: metrics-reader
@@ -172,17 +173,20 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: metallb-controller-authreviews
+  name: metallb-authreviews
   labels:
     app.kubernetes.io/name: metallb
     app.kubernetes.io/component: metrics-reader
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: metallb-controller-authreviews
+  name: metallb-authreviews
 subjects:
   - kind: ServiceAccount
     name: controller
+    namespace: metallb-system
+  - kind: ServiceAccount
+    name: speaker
     namespace: metallb-system
 ---
 apiVersion: monitoring.coreos.com/v1
@@ -198,6 +202,43 @@ spec:
     matchLabels:
       app: metallb
       component: controller
+  podMetricsEndpoints:
+    - port: metricshttps
+      scheme: https
+      tlsConfig:
+        insecureSkipVerify: true
+      authorization:
+        credentials:
+          name: metallb-metrics-token
+          key: token
+      interval: {{ observability_scrape_interval }}
+---
+# MetalLB speaker (metallb-system). The speaker is a hostNetwork DaemonSet that owns L2
+# advertisement — its metrics expose the per-node ARP/ND state, which is the data the
+# LB (your cluster's entry path) actually depends on. Same v0.16 scrape gauntlet as
+# the controller (same container port `metricshttps`:9120 over HTTPS with the webhook
+# cert, same bearer-token auth): REUSES the metallb-metrics-token Secret + the
+# metrics-reader ClusterRole already declared above (one token serves both components —
+# the token identifies the metrics-reader SA, which is allowed GET /metrics; the speaker
+# only needs to be able to RUN the TokenReview/SAR, granted by the metallb-authreviews
+# ClusterRoleBinding above which binds BOTH the controller and speaker SAs). The speaker
+# runs hostNetwork, so the PodMonitor scrapes the pod IP directly (kubernetes-pods SD
+# surfaces hostNetwork pods by their pod IP — already proven working by the kube-vip
+# PodMonitor). The 11- NP allow-ingress-from-prometheus selects `app: metallb` (covers
+# BOTH controller and speaker) on :9120.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: metallb-speaker
+  namespace: {{ observability_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - metallb-system
+  selector:
+    matchLabels:
+      app: metallb
+      component: speaker
   podMetricsEndpoints:
     - port: metricshttps
       scheme: https
