@@ -1,0 +1,187 @@
+---
+# ServiceMonitors/PodMonitors + a platform PrometheusRule in monitoring (nil
+# selectors -> cross-namespace). CRDs from 60- -> apply on 2nd boot. Targets =
+# components KPS does NOT cover. VERIFY each in Prometheus->Targets (fix port/selector).
+---
+# node-exporter (observability-host). The prometheus-node-exporter chart names its
+# Service port "metrics" (NOT "http-metrics") on :9100 — ServiceMonitor matches by name.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: node-exporter
+  namespace: {{ observability_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ observability_host_namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus-node-exporter
+  endpoints:
+    - port: metrics
+      interval: {{ observability_scrape_interval }}
+---
+# kube-vip (kube-system hostNetwork DaemonSet, metrics :2112). No Service -> PodMonitor.
+# The container declares port "metrics":2112 (added in 02-kube-vip-daemonset.yml.j2);
+# a PodMonitor can only scrape a DECLARED containerPort — numeric targetPort on a pod
+# that declares no port yields 0 targets (kubernetes-pods SD drops it on port resolve).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: kube-vip
+  namespace: {{ observability_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - kube-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-vip-ds
+  podMetricsEndpoints:
+    - port: metrics
+      interval: {{ observability_scrape_interval }}
+---
+# Traefik (kube-system). The metrics entrypoint (:9100) is exposed on the traefik
+# LoadBalancer Service by the 12- HelmChartConfig (ports.metrics.expose), so a
+# ServiceMonitor on port "metrics" resolves. (LB exposure is safe: the cluster is
+# behind a central firewall that blocks external reach.)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: traefik
+  namespace: {{ observability_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - kube-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: traefik
+  endpoints:
+    - port: metrics
+      interval: {{ observability_scrape_interval }}
+---
+# cert-manager (:9402) — only when certmanager_enabled.
+{% if certmanager_enabled | bool %}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cert-manager
+  namespace: {{ observability_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - cert-manager
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+  endpoints:
+    - port: http-metrics
+      interval: {{ observability_scrape_interval }}
+{% endif %}
+---
+# MetalLB controller (metallb-system). Container declares port "metricshttps":9120 and
+# serves Prometheus metrics over HTTPS at /metrics (same port as the webhook). PodMonitor
+# on the named port with scheme https + insecureSkipVerify (self-signed webhook cert).
+# The 11- NP must allow :9120 (not :7473) for the scrape to reach it.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: metallb-controller
+  namespace: {{ observability_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - metallb-system
+  selector:
+    matchLabels:
+      app: metallb
+      component: controller
+  podMetricsEndpoints:
+    - port: metricshttps
+      scheme: https
+      # metallb's :9120 serves the SAME self-signed webhook cert (CN=127.0.0.1),
+      # so HTTPS scrape cert verification fails (cert is NOT valid for the pod IP).
+      # insecureSkipVerify MUST sit under tlsConfig: — a bare endpoint-level
+      # insecureSkipVerify is silently dropped by the operator (the field is not
+      # part of the endpoint schema), so the scrape TLS-verifies and fails.
+      tlsConfig:
+        insecureSkipVerify: true
+      interval: {{ observability_scrape_interval }}
+---
+# ceph-csi-operator (ceph-csi-operator-system). The operator pod's selector label is
+# control-plane=ceph-csi-op-controller-manager (NOT app.kubernetes.io/name). NOTE: the
+# operator + the ceph-csi driver pods declare NO containerPort and bind no metrics
+# endpoint, so this stays 0/0 until the K3s-managed deployment is given a metrics
+# --bind-address + a declared containerPort — that is component-level work, out of this
+# template's scope. Left correctly configured so it comes up the moment metrics are on.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: ceph-csi-operator
+  namespace: {{ observability_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - ceph-csi-operator-system
+  selector:
+    matchLabels:
+      control-plane: ceph-csi-op-controller-manager
+  podMetricsEndpoints:
+    - portNumber: 8080
+      interval: {{ observability_scrape_interval }}
+---
+# Platform alerts. KPS ships a default ruleset; this adds cert-manager + a few
+# high-value generic ones it does NOT cover. Annotations use Go templating (not
+# Jinja), so the groups block below is wrapped in a Jinja raw block (verbatim).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: platform-alerts
+  namespace: {{ observability_namespace }}
+spec:
+{% raw %}
+  groups:
+    - name: platform
+      rules:
+        - alert: CertManagerCertNotReady
+          expr: certmanager_certificate_ready_status{condition="False"} == 1
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Certificate {{ $labels.name }} not Ready in {{ $labels.namespace }}"
+            description: "cert-manager Certificate {{ $labels.name }} has been not-Ready for >10m."
+        - alert: CertManagerCertExpiringSoon
+          expr: (certmanager_certificate_expiration_timestamp_seconds - time()) < 86400 * 30
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Certificate {{ $labels.name }} expiring in <30d"
+            description: "cert-manager Certificate {{ $labels.name }} in {{ $labels.namespace }} expires in <30 days."
+        - alert: KubePersistentVolumeClaimPending
+          expr: kube_persistentvolumeclaim_status_phase{phase="Pending"} == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} Pending"
+            description: "PVC has been Pending for >5m (no StorageClass, no space, or provisioner error)."
+        - alert: PodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total[1h]) > 5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} crash-looping"
+            description: "Container {{ $labels.container }} restarted >5 times in the last hour."
+        - alert: NodeFilesystemAlmostFull
+          expr: (1 - (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"})) > 0.85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Filesystem on {{ $labels.instance }} >85% full"
+            description: "Root filesystem on node {{ $labels.instance }} is >85% used."
+{% endraw %}

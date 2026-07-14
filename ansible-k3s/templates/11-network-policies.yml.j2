@@ -131,3 +131,31 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+---
+# Prometheus scrape allow (only if observability_enabled) — :9120 controller metrics
+# (metricshttps, served over HTTPS on the webhook port — NOT :7473).
+{% if observability_enabled | bool %}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-prometheus
+  namespace: metallb-system
+spec:
+  podSelector:
+    matchLabels:
+      app: metallb
+      component: controller
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ observability_namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9120
+{% endif %}

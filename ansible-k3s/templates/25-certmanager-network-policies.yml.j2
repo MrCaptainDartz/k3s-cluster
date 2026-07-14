@@ -93,3 +93,29 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+---
+# Prometheus scrape allow (only if observability_enabled AND certmanager_enabled) — :9402.
+{% if observability_enabled | bool and certmanager_enabled | bool %}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-prometheus
+  namespace: cert-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ observability_namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9402
+{% endif %}

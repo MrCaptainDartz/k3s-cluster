@@ -51,6 +51,14 @@ spec:
         expose:
           default: true
         exposedPort: 8080
+      # Metrics entrypoint (:9100) exposed on the LoadBalancer Service so the 65-
+      # ServiceMonitor can scrape port "metrics" (Service port named after the key).
+      # Safe to expose on the LB: the cluster sits behind a central firewall that
+      # blocks external reach, so :9100 is only reachable from the trusted LAN.
+      metrics:
+        expose:
+          default: true
+        exposedPort: 9100
     ingressRoute:
       dashboard:
         enabled: true

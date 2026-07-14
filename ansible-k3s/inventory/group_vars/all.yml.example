@@ -223,6 +223,55 @@ certmanager_webhook_ovh_chart_repo: "https://aureq.github.io/cert-manager-webhoo
 certmanager_webhook_infomaniak_version: "v0.3.1"
 
 # ============================================================
+# Observability (optional) — kube-prometheus-stack + Loki + Alloy
+# ============================================================
+# Flip observability_enabled to deploy the monitoring baseline (Prometheus +
+# Operator + Grafana + Alertmanager + kube-state-metrics, node-exporter DISABLED
+# in the bundle and installed separately; Loki logs; Alloy log shipper). All via
+# HelmChart CRs (group 60-65). monitoring=baseline (control plane),
+# observability-host=exempt (node-exporter + Alloy host DaemonSets). Secrets
+# (Telegram bot token, Grafana admin password) go in the gitignored all.yml only.
+observability_enabled: false
+
+# Namespaces (match 13-pod-security.yml.j2 + the HelmChart targetNamespaces).
+observability_namespace: "monitoring"
+observability_host_namespace: "observability-host"
+
+# Chart repos + pinned versions (pin for reproducibility — bump deliberately).
+# Loki uses the community chart (grafana-community): the original grafana/helm-charts
+# loki is now GEL-only; we use filesystem storage on a PVC, so minio is disabled.
+observability_kps_chart_repo: "https://prometheus-community.github.io/helm-charts"
+observability_kps_chart_version: "87.15.1"
+observability_loki_chart_repo: "https://grafana-community.github.io/helm-charts"
+observability_loki_chart_version: "18.4.4"
+observability_alloy_chart_repo: "https://grafana.github.io/helm-charts"
+observability_alloy_chart_version: "1.10.1"
+observability_node_exporter_chart_repo: "https://prometheus-community.github.io/helm-charts"
+observability_node_exporter_chart_version: "4.56.0"
+
+# Prometheus/Loki retention + PVC sizes (ceph-rbd); scrape interval for all monitors.
+observability_prometheus_retention: "15d"
+observability_prometheus_storage: "20Gi"
+observability_loki_retention: "7d"
+observability_loki_storage: "10Gi"
+observability_scrape_interval: "30s"
+
+# Grafana Ingress hostname (TLS added when certmanager_enabled) + the prod issuer
+# name (MUST match a certmanager_acme_servers entry).
+observability_grafana_hostname: "grafana.example.com"
+observability_grafana_tls_issuer: "letsencrypt-prod"
+
+# Alertmanager Telegram receiver (native telegram_configs). Bot token from
+# @BotFather; chat_id is an integer (negative for groups). Secrets — gitignored
+# all.yml only; REDACTED here. Leave chat_id 0 to mean "not configured".
+observability_alertmanager_telegram_bot_token: "REDACTED"
+observability_alertmanager_telegram_chat_id: 0
+
+# Grafana initial admin password (change after first login). Secret — real
+# value in the gitignored all.yml, REDACTED here.
+observability_grafana_admin_password: "REDACTED"
+
+# ============================================================
 # NFS CSI (optional) — access existing NFS shares (e.g. a NAS export)
 # ============================================================
 # Set nfs_enabled to true to deploy the kubernetes-csi NFS driver and one
@@ -364,6 +413,8 @@ ceph_manifest_templates:
 #   30-34  NFS CSI (url 30-33 + StorageClasses 34)
 #   40-44  SMB CSI (url 40-43 + StorageClasses 44)
 #   50-56  Ceph CSI (url 52-54 + templates 50,51,55,56) — always-on
+#   60-65  Observability (kube-prometheus-stack + Loki + Alloy + node-exporter,
+#           all HelmChart CRs) — opt-in
 # Within a range the driver/CRDs come before the StorageClasses/policies that
 # depend on them.
 nfs_manifest_urls:
@@ -411,3 +462,18 @@ certmanager_webhook_ovh_templates:
 certmanager_webhook_infomaniak_urls:
   - url: "https://github.com/Infomaniak/cert-manager-webhook-infomaniak/releases/download/{{ certmanager_webhook_infomaniak_version }}/rendered-manifest.yaml"
     filename: 21-certmanager-webhook-infomaniak.yaml
+
+# ------------------------------------------------------------
+# Optional observability manifests
+# ------------------------------------------------------------
+# Appended to k3s_server_manifests_* by site.yml only when observability_enabled.
+# All six are HelmChart CRs (no raw URLs). 65- (ServiceMonitors/Rules) needs the
+# Prometheus Operator CRDs from 60- -> applies on the 2nd boot (fire-and-forget).
+observability_manifest_urls: []
+observability_manifest_templates:
+  - 60-kube-prometheus-stack.yml.j2
+  - 61-loki.yml.j2
+  - 62-alloy.yml.j2
+  - 63-node-exporter.yml.j2
+  - 64-observability-network-policies.yml.j2
+  - 65-observability-rules.yml.j2

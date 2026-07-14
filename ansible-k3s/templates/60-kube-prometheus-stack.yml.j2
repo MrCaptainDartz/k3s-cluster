@@ -1,0 +1,109 @@
+---
+# kube-prometheus-stack via HelmChart CR — Prometheus + Operator + Grafana +
+# Alertmanager + kube-state-metrics + CRDs. Opt-in; targetNamespace monitoring.
+# node-exporter DISABLED here (separate 63- in exempt observability-host ns).
+# etcd/kcm/scheduler disabled: K3s runs them in-process, not scrapable static pods.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: kube-prometheus-stack
+  namespace: kube-system
+spec:
+  repo: "{{ observability_kps_chart_repo }}"
+  chart: kube-prometheus-stack
+  version: "{{ observability_kps_chart_version }}"
+  targetNamespace: {{ observability_namespace }}
+{% set telegram_configured = (observability_alertmanager_telegram_chat_id | int != 0) and (observability_alertmanager_telegram_bot_token | length > 0) and (observability_alertmanager_telegram_bot_token != "REDACTED") %}
+  valuesContent: |-
+    # node-exporter disabled (installed separately, see 63-).
+    prometheus-node-exporter:
+      enabled: false
+
+    # K3s runs these in the server process (no separate static pods to scrape).
+    kubeEtcd:
+      enabled: false
+    kubeControllerManager:
+      enabled: false
+    kubeScheduler:
+      enabled: false
+
+    prometheus:
+      prometheusSpec:
+        retention: {{ observability_prometheus_retention }}
+        scrapeInterval: {{ observability_scrape_interval }}
+        # nil selectors => discover all ServiceMonitors/PodMonitors across namespaces (65-).
+        serviceMonitorSelectorNilUsesHelmValues: false
+        serviceMonitorSelector: {}
+        serviceMonitorNamespaceSelector: {}
+        podMonitorSelectorNilUsesHelmValues: false
+        podMonitorSelector: {}
+        podMonitorNamespaceSelector: {}
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: {{ ceph_sc_rbd_name }}
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: {{ observability_prometheus_storage }}
+
+    # Alertmanager. The chart deep-merges this with its default config, which keeps a
+    # Watchdog sub-route targeting receiver "null"; our receivers override replaces
+    # the chart default, so we MUST re-declare a "null" no-op. "null" is QUOTED — a bare
+    # null is the YAML null value, which Alertmanager rejects as an empty name. Block
+    # tags sit on their OWN line so trim_blocks only collapses the tag line (no merge).
+    alertmanager:
+      config:
+        global:
+          resolve_timeout: 5m
+        route:
+          group_by: ["alertname", "namespace"]
+          group_wait: 30s
+          group_interval: 5m
+          repeat_interval: 4h
+{% if telegram_configured %}
+          receiver: telegram
+{% else %}
+          receiver: "null"
+{% endif %}
+        receivers:
+          - name: "null"
+{% if telegram_configured %}
+          - name: telegram
+            telegram_configs:
+              - bot_token: "{{ observability_alertmanager_telegram_bot_token }}"
+                chat_id: {{ observability_alertmanager_telegram_chat_id }}
+                send_resolved: true
+{% endif %}
+
+    # Grafana — Ingress via Traefik; TLS added when cert-manager is enabled.
+    grafana:
+      adminPassword: {{ observability_grafana_admin_password }}
+      persistence:
+        enabled: true
+        storageClassName: {{ ceph_sc_rbd_name }}
+        size: 5Gi
+      ingress:
+        enabled: true
+        ingressClassName: traefik
+        hosts:
+          - {{ observability_grafana_hostname }}
+{% if certmanager_enabled | bool %}
+        tls:
+          - hosts:
+              - {{ observability_grafana_hostname }}
+            secretName: grafana-tls
+        annotations:
+          cert-manager.io/cluster-issuer: {{ observability_grafana_tls_issuer }}
+{% endif %}
+      # Loki datasource (logs). Loki is a separate HelmChart (61-) in the same
+      # namespace -> http://loki.<ns>.svc:3100. KPS Grafana provisions sidecar
+      # datasources from this list; the Prometheus datasource is kept as default.
+      additionalDataSources:
+        - name: Loki
+          type: loki
+          access: proxy
+          url: http://loki.{{ observability_namespace }}.svc:3100
+          isDefault: false
+          jsonData:
+            maxLines: 1000

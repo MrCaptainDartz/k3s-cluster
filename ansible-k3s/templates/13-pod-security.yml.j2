@@ -35,6 +35,12 @@
 #     namespace for the Infomaniak webhook; this manifest pre-creates it with the
 #     labels, then 21- patches it (idempotent). The Infomaniak webhook is a
 #     plain pod too, so baseline is safe there.
+#   monitoring  : SAME (enforce=baseline, audit=restricted, warn=restricted), only
+#     when observability_enabled. The stateful control plane (Prometheus, Grafana,
+#     Loki, Alertmanager, kube-state-metrics) — all plain pods, so baseline breaks
+#     nothing. Pre-created here with the labels, patched by 60-/61- (idempotent).
+#     The host DaemonSets that violate baseline (node-exporter, Alloy) live in the
+#     exempt `observability-host` namespace (created unlabelled below).
 #   restricted is NOT enforced anywhere automatically: too many images do not
 #   comply (runAsNonRoot etc.) and it would turn the baseline into friction.
 #   Opt into it per sensitive namespace when you create one.
@@ -45,6 +51,9 @@
 #   kube-system               (kube-vip, Traefik, CoreDNS, kube-proxy, metrics-server)
 #   metallb-system            (speaker DaemonSet runs hostNetwork)
 #   ceph-csi-operator-system  (CSI node plugins run privileged + hostNetwork)
+#   observability-host        (when observability_enabled — node-exporter +
+#                             Alloy use hostNetwork/hostPID/hostPath; isolated here
+#                             instead of weakening baseline-enforced `monitoring`)
 # An unlabelled namespace has NO PSA enforcement, which is the correct default
 # for them. (K3s sets no cluster-wide default profile, so "unlabelled" is truly
 # unrestricted — there is nothing to override.)
@@ -90,4 +99,25 @@ metadata:
     pod-security.kubernetes.io/audit-version: latest
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: latest
+{% endif %}
+{% if observability_enabled | bool %}
+---
+# monitoring — baseline-enforced (pre-created here; patched by 60-/61-).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ observability_namespace }}
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+---
+# observability-host — UNLABELLED (exempt): host DaemonSets that violate baseline.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ observability_host_namespace }}
 {% endif %}

@@ -208,6 +208,56 @@ spec:
 
 Renewal is automatic (~30 days before expiry). The `cert-manager` namespace is locked down (deny-all both ways + explicit allows; no other namespace is touched).
 
+## Observability — optional
+
+Off by default (`observability_enabled: false`): nothing is installed. Flip the flag to deploy a monitoring baseline that lets you **see and alert on the platform itself** — nodes, kubelet/cAdvisor, kube-api, CoreDNS, Traefik, kube-vip, cert-manager, MetalLB, ceph-csi-operator — plus **pod logs**, with room to grow when your apps arrive.
+
+### Stack
+
+Everything deploys via the project's **HelmChart CR** pattern (model: `22-certmanager-webhook-ovh.yml.j2`), group `60-65`, opt-in via `observability_enabled`:
+
+| Component | Chart | What it gives you |
+| --- | --- | --- |
+| [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) | `kube-prometheus-stack` (`60-`) | Prometheus + Prometheus Operator + Grafana + Alertmanager + kube-state-metrics + the Operator CRDs (ServiceMonitor/PodMonitor/PrometheusRule) + the upstream default dashboards and alert rules. **node-exporter is disabled here** and installed separately. |
+| [Loki](https://github.com/grafana-community/helm-charts/tree/main/charts/loki) | `loki` (`61-`, community chart) | Logs backend, monolithic / single-binary, filesystem storage on a `ceph-rbd` PVC. |
+| [Alloy](https://github.com/grafana/alloy/tree/main/operations/helm/charts/alloy) | `alloy` (`62-`) | Log shipper DaemonSet — tails pod logs from the node filesystem and pushes to Loki. (Metrics/traces collectors not declared; add them later.) |
+| [prometheus-node-exporter](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus-node-exporter) | `prometheus-node-exporter` (`63-`) | Host metrics (CPU/mem/disk/net) DaemonSet. Installed separately so it can live in the exempt namespace. |
+
+kube-prometheus-stack **bundles its own ServiceMonitors** for kubelet / kube-apiserver / CoreDNS / kube-state-metrics, so those scrape automatically. `65-` adds the cross-namespace ServiceMonitors/PodMonitors for the components KPS does **not** cover (Traefik, kube-vip, cert-manager, MetalLB, ceph-csi-operator, our separate node-exporter) + one `PrometheusRule` with platform alerts (cert-manager certificates, PVC pending, crash-loop, disk full).
+
+> **Backend is Prometheus** (not VictoriaMetrics). Storage: Prometheus ~20Gi + Loki ~10Gi + Grafana 5Gi, all on `ceph-rbd`. Retention: Prometheus 15d, Loki 7d (compactor). Tune `observability_prometheus_*` / `observability_loki_*` in `all.yml`.
+
+### Namespace split (PSA)
+
+The control plane and the host-accessing collectors cannot share a namespace — node-exporter (`hostNetwork`+`hostPID`+`hostPath`) and Alloy (`hostPath /var/log/pods`) both violate PSA `baseline`. Split:
+
+- **`monitoring`** — `enforce: baseline`. The stateful control plane (Prometheus, Grafana, Loki, Alertmanager, kube-state-metrics), all plain pods. Pre-created with labels by `13-pod-security.yml.j2`, then patched by the HelmCharts. Egress is **left open** (Prometheus is a privileged observer — like `kube-system`, it must reach kube-apiserver, kubelet and every target across namespaces); ingress is deny-all + Traefik→Grafana `:3000`, Alloy→Loki `:3100`, and intra-namespace self-scrape.
+- **`observability-host`** — **unlabelled (exempt)**. The two host DaemonSets. Egress constrained to Loki `:3100` + DNS.
+
+The locked-down system namespaces (`metallb-system`, `cert-manager`, `ceph-csi-operator-system`) each gain a gated `allow-ingress-from-prometheus` (in `11-`/`25-`/`56-`) so Prometheus can scrape their metrics ports — they stay deny-all for everyone but the scraper.
+
+### Enable it
+
+```yaml
+# inventory/group_vars/all.yml (gitignored — holds the secrets)
+observability_enabled: true
+observability_grafana_hostname: "grafana.yourdomain.tld"   # covered by a cert-manager DNS cred -> real TLS
+observability_grafana_tls_issuer: "letsencrypt-prod"       # only used when certmanager_enabled
+observability_alertmanager_telegram_bot_token: "123456:ABC..."   # from @BotFather
+observability_alertmanager_telegram_chat_id: -1001234567890       # numeric; negative for groups
+observability_grafana_admin_password: "change-me-after-first-login"
+```
+
+`observability_alertmanager_telegram_bot_token` and `observability_grafana_admin_password` are **secrets** — put them in the gitignored `all.yml`, never in the committed `all.yml.example` (same boundary as `ceph_client_key` / cert-manager DNS creds). Alerts go to Telegram via Alertmanager's native `telegram_configs` (no bridge component needed). The alert set: `CertManagerCertNotReady`, `CertManagerCertExpiringSoon` (<30d), `KubePersistentVolumeClaimPending`, `PodCrashLooping`, `NodeFilesystemAlmostFull` — complementing KPS's own comprehensive default ruleset.
+
+### CRD timing caveat
+
+`65-` (ServiceMonitors/PodMonitors/PrometheusRule) needs the Prometheus Operator CRDs that `60-` installs. K3s auto-deploy is **fire-and-forget in filename order**, so on a **fresh deploy** these apply before the CRDs exist and are skipped; they apply cleanly on the **2nd boot** (the same caveat cert-manager issuers already live with). The `site.yml` post-tasks verify the pods are up; the scrape targets simply appear after a re-run. Verify with the commands in [Verification](#verification).
+
+### Verify the targets
+
+The ServiceMonitors in `65-` use best-effort port names/labels for each platform component. After enabling, open **Prometheus → Status → Targets**: every target should be UP. A DOWN target means the `port`/`targetPort` or selector does not match the actual chart/manifest — adjust it in `65-` and the matching `allow-ingress-from-prometheus` port in `11-`/`25-`/`56-` (they must match the same pod port). Known likely adjustments: Traefik (requires the metrics entrypoint enabled — set it in `12-traefik-config.yml.j2`) and ceph-csi-operator (verify the operator's metrics bind port).
+
 ## Quick Start
 
 ### 1. Install the dependency role
@@ -270,6 +320,14 @@ Here are some important variables based on the provided examples:
 | `smb_csi_version`     | `v1.20.3`                              | Release tag of `kubernetes-csi/csi-driver-smb` (raw manifests pulled from this tag). |
 | `smb_shares`          | `[{name, source}]`                     | One StorageClass per share (cluster-scoped, named after the share); `name` is the `storageClassName` to reference in a PVC. |
 | `smb_secret_name`     | `csi-smb-creds`                        | Name of the credentials Secret you create **per namespace** (the StorageClasses resolve it via `${pvc.namespace}`). |
+| `observability_enabled` | `false`                            | Deploy the monitoring baseline (kube-prometheus-stack + Loki + Alloy + node-exporter). `false` = nothing is installed. See [Observability (optional)](#observability-optional). |
+| `observability_prometheus_retention` / `_storage` | `15d` / `20Gi`        | Prometheus retention window and PVC size (on `ceph-rbd`). ~50k series at 30s scrape → ~6-10GB for 15d; 20Gi leaves headroom. |
+| `observability_loki_retention` / `_storage` | `7d` / `10Gi`             | Loki compactor retention and PVC size (filesystem storage on `ceph-rbd`). |
+| `observability_scrape_interval` | `30s`                          | Scrape interval applied to the ServiceMonitors in `65-`. |
+| `observability_grafana_hostname` | `grafana.example.com`       | Hostname for the Grafana Ingress (Traefik). TLS is added when `certmanager_enabled`. |
+| `observability_grafana_tls_issuer` | `letsencrypt-prod`         | cert-manager `ClusterIssuer` used for the Grafana Ingress TLS (must match a `certmanager_acme_servers` entry). |
+| `observability_alertmanager_telegram_bot_token` / `_chat_id` | `REDACTED` / `0` | Alertmanager Telegram receiver (native `telegram_configs`). **Secrets** — real values in the gitignored `all.yml`; `chat_id` is an integer (negative for groups). |
+| `observability_grafana_admin_password` | `REDACTED`                  | Grafana initial admin password. **Secret** — real value in the gitignored `all.yml`; change it after first login. |
 
 #### Tested component versions
 
@@ -287,6 +345,10 @@ The versions below are the ones currently pinned in `inventory/group_vars/all.ym
 | cert-manager (optional) | `certmanager_version`     | `v1.21.0`|
 | OVH DNS webhook (optional) | `certmanager_webhook_ovh_chart_version` | `0.9.14` (aureq chart) |
 | Infomaniak DNS webhook (optional) | `certmanager_webhook_infomaniak_version` | `v0.3.1` |
+| kube-prometheus-stack (optional) | `observability_kps_chart_version` | `87.15.1` |
+| Loki (optional) | `observability_loki_chart_version` | `18.4.4` (community chart) |
+| Alloy (optional) | `observability_alloy_chart_version` | `1.10.1` |
+| prometheus-node-exporter (optional) | `observability_node_exporter_chart_version` | `4.56.0` |
 
 > K3s is **pinned** to a specific release (`v1.36.2+k3s1`) rather than the moving `stable` channel, so a K3s bump (which silently changes the bundled Traefik chart version) is a deliberate, tested change.
 
@@ -386,7 +448,13 @@ ansible-k3s/
     ├── 50-ceph-secrets.yml.j2            # Ceph client key Secret (always-on, group 50-56)
     ├── 51-ceph-storageclasses.yml.j2     # RBD + CephFS StorageClasses
     ├── 55-ceph-csi-operator-config.yml.j2 # Driver / CephConnection / ClientProfile CRs
-    └── 56-ceph-network-policies.yml.j2   # ceph-csi-operator-system deny-all + targeted egress
+    ├── 56-ceph-network-policies.yml.j2   # ceph-csi-operator-system deny-all + targeted egress
+    ├── 60-kube-prometheus-stack.yml.j2   # HelmChart CR: Prometheus + Operator + Grafana + Alertmanager + kube-state-metrics (only if observability_enabled, node-exporter disabled)
+    ├── 61-loki.yml.j2                    # HelmChart CR: Loki monolithic + filesystem PVC (only if observability_enabled)
+    ├── 62-alloy.yml.j2                   # HelmChart CR: Alloy log shipper DaemonSet in observability-host (only if observability_enabled)
+    ├── 63-node-exporter.yml.j2           # HelmChart CR: prometheus-node-exporter DaemonSet in observability-host (only if observability_enabled)
+    ├── 64-observability-network-policies.yml.j2 # monitoring + observability-host deny-all + targeted allows (only if observability_enabled)
+    └── 65-observability-rules.yml.j2     # ServiceMonitors/PodMonitors + platform PrometheusRule (only if observability_enabled)
 ```
 
 > The `.j2` files above are rendered by the role; the **URL** manifests (MetalLB native, ceph-csi-operator CRD/RBAC/operator, the NFS/SMB driver manifests, `cert-manager.yaml`, the Infomaniak webhook) are downloaded directly into the same `/var/lib/rancher/k3s/server/manifests/` dir. They all share one numbering scheme with **no overlap between ranges**, applied in filename order:
@@ -398,8 +466,9 @@ ansible-k3s/
 > | `30-34` | NFS CSI (RBAC/driverinfo/controller/node + StorageClasses) | URLs 30-33 + template 34 |
 > | `40-44` | SMB CSI (RBAC/driver/controller/node + StorageClasses) | URLs 40-43 + template 44 |
 > | `50-56` | Ceph CSI (secrets, StorageClasses, operator CRD/RBAC/deploy, config, NP) | URLs 52-54 + templates 50,51,55,56 |
+> | `60-65` | Observability (kube-prometheus-stack + Loki + Alloy + node-exporter, all HelmChart CRs) | templates 60-65 |
 >
-> Within each range the driver/CRDs precede the StorageClasses/policies that depend on them. cert-manager sits right after the baseline; the three CSI drivers (NFS/SMB/Ceph) are grouped together after it. Ceph is the always-on primary storage (no `*_enabled` flag); NFS/SMB/cert-manager are opt-in.
+> Within each range the driver/CRDs precede the StorageClasses/policies that depend on them. cert-manager sits right after the baseline; the three CSI drivers (NFS/SMB/Ceph) are grouped together after it; observability is last. Ceph is the always-on primary storage (no `*_enabled` flag); NFS/SMB/cert-manager/observability are opt-in.
 
 ## Backups (etcd snapshots)
 
@@ -431,7 +500,8 @@ Complementing the network zero-trust baseline, the auto-deployed manifest `13-po
 | `default` | `baseline` | `restricted` | Rejects privileged / `hostPath` / `hostNetwork` / `hostPID` / all-capabilities pods; logs+warns (does **not** block) pods that could be hardened to `restricted`. `default` is the strict-quarantine namespace (no real app belongs here), so `baseline` breaks nothing while closing escape vectors. |
 | `cert-manager` (when enabled) | `baseline` | `restricted` | Same hardening: cert-manager's pods (controller/webhook/cainjector + the OVH webhook) are all plain pods (no `privileged`/`hostNetwork`/`hostPath`), so `baseline` breaks nothing and adds defense-in-depth on a namespace that already has a deny-all NetworkPolicy. |
 | `cert-manager-infomaniak` (when an Infomaniak cred exists) | `baseline` | `restricted` | Same: the Infomaniak webhook runs here (separate namespace, created by its rendered-manifest); it is a plain pod, so `baseline` is safe. Pre-created with labels by `13-`, then patched by `21-`. |
-| `kube-system`, `metallb-system`, `ceph-csi-operator-system` | — (unlabelled) | — | **Intentionally exempt**: these hold system pods that legitimately need `privileged`/`hostNetwork` (kube-vip, Traefik, MetalLB speakers, CSI node plugins). K3s sets no cluster-wide default profile, so unlabelled = no enforcement. |
+| `monitoring` (when observability enabled) | `baseline` | `restricted` | The stateful observability control plane (Prometheus, Grafana, Loki, Alertmanager, kube-state-metrics) — all plain pods, so `baseline` breaks nothing and adds defense-in-depth. Pre-created with labels by `13-`, then patched by the kube-prometheus-stack / Loki HelmCharts (`60-`/`61-`). |
+| `kube-system`, `metallb-system`, `ceph-csi-operator-system`, `observability-host` (when enabled) | — (unlabelled) | — | **Intentionally exempt**: these hold system pods that legitimately need `privileged`/`hostNetwork` (kube-vip, Traefik, MetalLB speakers, CSI node plugins). `observability-host` holds the host DaemonSets — node-exporter (`hostNetwork`+`hostPID`+`hostPath`) and Alloy (`hostPath /var/log/pods`) — which violate baseline and so are isolated in their own exempt namespace instead of weakening `monitoring`. K3s sets no cluster-wide default profile, so unlabelled = no enforcement. |
 
 `restricted` is **not** enforced anywhere automatically — too many images do not comply (`runAsNonRoot`, `seccomp=RuntimeDefault`) and it would turn the baseline into friction. Opt into it **per sensitive namespace** when you create one.
 
@@ -458,6 +528,11 @@ No policies are applied by default, so the pod network is flat: every pod can re
 | `metallb-system`           | deny all     | API `node_cidr:6443`, DNS :53                                                                                      | The controller does leader-election + watch via the API server. Speakers run `hostNetwork` (not enforced); the webhook is served to the kube-apiserver (node-origin, exempt — see below). |
 | `ceph-csi-operator-system` (`56-`) | deny all     | Ceph `ceph_subnet` on 3300 / 6789 / 6800-7300 (`endPort`), API `node_cidr:6443`, DNS :53                            | The CSI provisioner connects to the Ceph monitors AND the OSDs directly (after fetching the OSD map), so egress targets the whole Ceph subnet. Protects the operator + ctrlplugin (hold the Ceph Secret / drive provisioning). |
 | `kube-system`              | **none**     | —                                                                                                                  | Left open by design (critical components; partly `hostNetwork`). See note above.                           |
+
+| `monitoring` (`64-`, when observability enabled) | deny all (ingress) | **egress left open** (privileged observer, like `kube-system`) | Prometheus must reach kube-apiserver, kubelet and every scraped target across namespaces, so egress is unconstrained. Ingress exceptions: Traefik → Grafana `:3000`, Alloy → Loki `:3100`, and intra-namespace self-scrape. |
+| `observability-host` (`64-`, when observability enabled) | deny all (ingress) | Loki `:3100` (to `monitoring`), DNS :53 | Holds the host DaemonSets. Alloy only needs to push logs to Loki and resolve DNS; node-exporter is scraped (no egress). |
+
+> **When observability is enabled**, the locked-down system namespaces (`metallb-system` in `11-`, `cert-manager` in `25-`, `ceph-csi-operator-system` in `56-`) each gain a gated `allow-ingress-from-prometheus` policy (under `{% if observability_enabled %}`) so the Prometheus pod in `monitoring` can reach their metrics ports (`:7473`, `:9402`, `:8081` respectively). The namespaces stay deny-all for everyone but Prometheus — only the scraper gets in.
 
 This is the **cluster baseline** (system + quarantine namespaces): deny-all-both + targeted egress. **Application namespaces** use the same deny-all + explicit-allow pattern, applied per namespace; see [Securing a new namespace (step by step)](#securing-a-new-namespace-step-by-step).
 
@@ -887,6 +962,26 @@ kubectl get role,rolebinding -n cert-manager | grep cred-reader  # webhook secre
 kubectl get networkpolicy -n cert-manager           # default-deny-all + the 4 explicit allows
 # Confirm the API egress target matches the NP (endpoints within node_cidr):
 kubectl get endpoints -n default kubernetes -o wide
+
+# Verify observability (only if observability_enabled)
+kubectl -n monitoring get all                            # prometheus, grafana, alertmanager, kube-state-metrics, loki Running
+kubectl -n observability-host get ds                     # prometheus-node-exporter + alloy DaemonSets Ready (one pod per node)
+kubectl get helmchart -n kube-system                      # kube-prometheus-stack, loki, alloy, prometheus-node-exporter
+kubectl get networkpolicy -n monitoring                  # default-deny-all + allow-ingress-grafana/-from-alloy/-intra-namespace
+kubectl get networkpolicy -n observability-host          # default-deny-all + allow-egress-to-loki + allow-egress-dns
+# The scrape-ingress allows added to the locked-down namespaces (only when enabled):
+kubectl get networkpolicy -n metallb-system            allow-ingress-from-prometheus
+kubectl get networkpolicy -n cert-manager               allow-ingress-from-prometheus   # only if certmanager_enabled too
+kubectl get networkpolicy -n ceph-csi-operator-system  allow-ingress-from-prometheus
+# CRD-timing note: ServiceMonitors/PodMonitors/PrometheusRule (65-) need the Operator
+# CRDs from kube-prometheus-stack (60-); on a fresh deploy they apply on the 2nd boot,
+# so they may be absent right after the first run — re-run the playbook to apply them.
+kubectl get servicemonitor,podmonitor,prometheusrule -n monitoring
+# Open Grafana at https://<observability_grafana_hostname> (TLS valid when cert-manager on),
+# log in with admin / <observability_grafana_admin_password>. In Prometheus -> Status ->
+# Targets, every platform target should be UP; if one is DOWN its ServiceMonitor port name
+# or label does not match the chart/manifest — adjust the `port`/`targetPort` in 65- and the
+# matching allow port in 11/25/56. Grafana Logs explorer should show pod logs (Alloy -> Loki).
 
 # Verify the etcd snapshot schedule (run on a control-plane node)
 sudo k3s etcd-snapshot ls

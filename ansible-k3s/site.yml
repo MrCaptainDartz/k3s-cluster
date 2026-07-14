@@ -24,7 +24,10 @@
         }}
       when:
         - k3s_vip_interface | length == 0
-        - item.ipv4.network == (node_cidr | ipaddr('network'))
+          # node_cidr is network-form (e.g. 10.20.4.0/24); strip the /prefix to get
+          # the network and compare to each interface's own ipv4.network fact. Avoids
+          # the ipaddr filter (needs the netaddr Python lib, not always installed).
+        - item.ipv4.network == (node_cidr | split('/') | first)
 
     - name: Fail if the kube-vip interface could not be resolved
       ansible.builtin.fail:
@@ -92,6 +95,21 @@
             + (((certmanager_enabled | bool) and
                 (certmanager_dns_credentials | default([]) | selectattr('provider', 'equalto', 'ovh') | list | length > 0))
                | ternary(certmanager_webhook_ovh_templates, []))
+          }}
+
+    # Observability (kube-prometheus-stack + Loki + Alloy + node-exporter):
+    # opt-in, all HelmChart CRs (group 60-65). Nothing installed unless enabled.
+    - name: Append optional observability manifests when enabled
+      ansible.builtin.set_fact:
+        k3s_server_manifests_urls: >-
+          {{
+            k3s_server_manifests_urls
+            + (observability_enabled | bool | ternary(observability_manifest_urls, []))
+          }}
+        k3s_server_manifests_templates: >-
+          {{
+            k3s_server_manifests_templates
+            + (observability_enabled | bool | ternary(observability_manifest_templates, []))
           }}
   roles:
     - role: xanmanning.k3s
@@ -176,7 +194,7 @@
           - --timeout=60s
       changed_when: false
       register: verify_traefik
-      retries: 15
+      retries: 20
       delay: 5
       until: verify_traefik.rc == 0
       when: inventory_hostname == (groups['k3s_cluster'] | first)
@@ -194,7 +212,7 @@
           - --timeout=60s
       changed_when: false
       register: verify_metallb
-      retries: 15
+      retries: 20
       delay: 5
       until: verify_metallb.rc == 0
       when: inventory_hostname == (groups['k3s_cluster'] | first)
@@ -206,13 +224,13 @@
           - kubectl
           - rollout
           - status
-          - deployment/ceph-csi-operator
+          - deployment/ceph-csi-operator-controller-manager
           - -n
           - ceph-csi-operator-system
           - --timeout=60s
       changed_when: false
       register: verify_ceph_operator
-      retries: 15
+      retries: 20
       delay: 5
       until: verify_ceph_operator.rc == 0
       when: inventory_hostname == (groups['k3s_cluster'] | first)
@@ -231,7 +249,7 @@
           - --timeout=120s
       changed_when: false
       register: verify_certmanager
-      retries: 10
+      retries: 20
       delay: 5
       until: verify_certmanager.rc == 0
       when:
@@ -251,7 +269,7 @@
           - --timeout=60s
       changed_when: false
       register: verify_nfs
-      retries: 15
+      retries: 20
       delay: 5
       until: verify_nfs.rc == 0
       when:
@@ -271,9 +289,154 @@
           - --timeout=60s
       changed_when: false
       register: verify_smb
-      retries: 15
+      retries: 20
       delay: 5
       until: verify_smb.rc == 0
       when:
         - inventory_hostname == (groups['k3s_cluster'] | first)
         - smb_enabled | bool
+
+    # ------------------------------------------------------------
+    # Observability verification — HelmChart CRs apply fire-and-forget; these
+    # rollout checks confirm the pods came up. ServiceMonitors/Rules (65-) need
+    # the 60- CRDs and apply on the 2nd boot (same caveat as cert-manager issuers).
+    # ------------------------------------------------------------
+    - name: Verify Prometheus is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - statefulset/prometheus-kube-prometheus-stack-prometheus
+          - -n
+          - monitoring
+          - --timeout=60s
+      changed_when: false
+      register: verify_prometheus
+      retries: 20
+      delay: 5
+      until: verify_prometheus.rc == 0
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - observability_enabled | bool
+
+    - name: Verify Grafana is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/kube-prometheus-stack-grafana
+          - -n
+          - monitoring
+          - --timeout=60s
+      changed_when: false
+      register: verify_grafana
+      retries: 20
+      delay: 5
+      until: verify_grafana.rc == 0
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - observability_enabled | bool
+
+    - name: Verify Alertmanager is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - statefulset/alertmanager-kube-prometheus-stack-alertmanager
+          - -n
+          - monitoring
+          - --timeout=60s
+      changed_when: false
+      register: verify_alertmanager
+      retries: 20
+      delay: 5
+      until: verify_alertmanager.rc == 0
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - observability_enabled | bool
+
+    - name: Verify kube-state-metrics is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/kube-prometheus-stack-kube-state-metrics
+          - -n
+          - monitoring
+          - --timeout=60s
+      changed_when: false
+      register: verify_kube_state_metrics
+      retries: 20
+      delay: 5
+      until: verify_kube_state_metrics.rc == 0
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - observability_enabled | bool
+
+    - name: Verify node-exporter DaemonSet is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - daemonset/prometheus-node-exporter
+          - -n
+          - observability-host
+          - --timeout=60s
+      changed_when: false
+      register: verify_node_exporter
+      retries: 20
+      delay: 5
+      until: verify_node_exporter.rc == 0
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - observability_enabled | bool
+
+    - name: Verify Loki is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - statefulset/loki
+          - -n
+          - monitoring
+          - --timeout=60s
+      changed_when: false
+      register: verify_loki
+      retries: 20
+      delay: 5
+      until: verify_loki.rc == 0
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - observability_enabled | bool
+
+    - name: Verify Alloy DaemonSet is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - daemonset/alloy
+          - -n
+          - observability-host
+          - --timeout=60s
+      changed_when: false
+      register: verify_alloy
+      retries: 20
+      delay: 5
+      until: verify_alloy.rc == 0
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - observability_enabled | bool

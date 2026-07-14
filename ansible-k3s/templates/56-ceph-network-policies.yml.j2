@@ -99,3 +99,30 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+---
+# Prometheus scrape allow (only if observability_enabled) — operator metrics :8081.
+# Verify the port matches the operator's bind; adjust here + the 65- PodMonitor.
+{% if observability_enabled | bool %}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-prometheus
+  namespace: ceph-csi-operator-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ceph-csi-operator
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ observability_namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 8081
+{% endif %}

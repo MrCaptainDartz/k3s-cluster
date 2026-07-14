@@ -1,0 +1,132 @@
+---
+# Zero-trust NPs for monitoring + observability-host (same pattern as 11-/56-).
+# monitoring: deny-all INGRESS (egress open — Prometheus is a privileged observer);
+#   ingress allows Traefik->Grafana, Alloy->Loki, intra-ns self-scrape.
+# observability-host: deny-all ingress; egress Loki:3100 + DNS. node-exporter is
+# hostNetwork so kube-router does NOT enforce NP on it anyway.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{ observability_namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Traefik (kube-system) -> Grafana :3000.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-grafana
+  namespace: {{ observability_namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: 3000
+---
+# Alloy (observability-host) -> Loki :3100.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-alloy
+  namespace: {{ observability_namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ observability_host_namespace }}
+      ports:
+        - protocol: TCP
+          port: 3100
+---
+# Intra-namespace: Prometheus -> kube-state-metrics / Alertmanager / Grafana metrics.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-intra-namespace
+  namespace: {{ observability_namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ observability_namespace }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{ observability_host_namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Alloy -> Loki (monitoring) :3100. node-exporter needs no egress (it is scraped).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-loki
+  namespace: {{ observability_host_namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ observability_namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+      ports:
+        - protocol: TCP
+          port: 3100
+---
+# DNS for service-name resolution (loki.monitoring.svc).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+  namespace: {{ observability_host_namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
