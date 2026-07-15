@@ -15,21 +15,27 @@ spec:
   targetNamespace: {{ observability_namespace }}
 {% set telegram_configured = (observability_alertmanager_telegram_chat_id | int != 0) and (observability_alertmanager_telegram_bot_token | length > 0) and (observability_alertmanager_telegram_bot_token != "REDACTED") %}
   valuesContent: |-
-    # node-exporter disabled (installed separately, see 63-).
-    prometheus-node-exporter:
+    # node-exporter disabled (installed separately, see 63-). NOTE the key:
+    # `prometheus-node-exporter` is a Helm SUBCHART of kube-prometheus-stack, and
+    # its activation condition (Chart.yaml dependencies[].condition) is
+    # `nodeExporter.enabled` — NOT `prometheus-node-exporter.enabled`. The latter
+    # is a SILENT NO-OP in KPS v67+ (the subchart ships no top-level `enabled`
+    # value, so the false is passed through and ignored, and the subchart
+    # renders anyway — identical to chart defaults). Using the old key leaves the
+    # DS/Service/ServiceMonitor deployed and, since `monitoring` is PSS baseline,
+    # the hostNetwork/hostPath DS pods are rejected on create -> desired=3
+    # current=0 -> KubeDaemonSetRolloutStuck + KubeDaemonSetNotScheduled fire. The
+    # correct key is `nodeExporter.enabled`.
+    nodeExporter:
       enabled: false
 
     # K3s runs these in the server/agent process (no separate static pods to
     # scrape), so KPS's default scrapers for them have empty targets and fire
     # false-positive *Down alerts. kube-proxy likewise has NO standalone pod in
     # K3s (it runs in-process) -> kube-prometheus-stack-kube-proxy headless
-    # Service has no endpoints -> KubeProxyDown fires. Disable all four.
-    # NOTE: the K3s HelmChart controller is apply-only (helm template + apply) —
-    # it does NOT delete resources removed from the render, so flipping these to
-    # false leaves the previously-applied Services/ServiceMonitors ORPHANED. They
-    # must be deleted manually once (see README/cleanup): the kube-prometheus-stack
-    # -kube-proxy Service+ServiceMonitor and -prometheus-node-exporter DS+Service+
-    # ServiceMonitor. The real node-exporter lives in observability-host (63-).
+    # Service has no endpoints -> KubeProxyDown fires. Disable all four. Unlike
+    # node-exporter above, these are NOT subcharts — they are internal KPS
+    # components rendered by the parent chart, so their `*.enabled` keys work.
     kubeEtcd:
       enabled: false
     kubeControllerManager:
