@@ -82,7 +82,11 @@ cluster_cidr: "10.42.0.0/16"
 # Ceph CSI
 # ============================================================
 
+# StorageClass names. ceph-rbd (default, Delete) + ceph-rbd-retain (Retain, for data you can't
+# regenerate: DBs, important app data) + ceph-cephfs (Retain, shared/durable FS). Pick by DATA VALUE,
+# not storage type — the default (Delete) is dangerous for non-reproducible data. See 51-.
 ceph_sc_rbd_name: "ceph-rbd"
+ceph_sc_rbd_retain_name: "ceph-rbd-retain"
 ceph_sc_cephfs_name: "ceph-cephfs"
 
 ceph_csi_operator_version: "v1.0.4"

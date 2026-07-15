@@ -41,7 +41,7 @@ ansible-k3s/
     ├── 34-nfs-storageclasses.yml.j2       # NFS CSI StorageClasses, one per nfs_shares entry (only if nfs_enabled)
     ├── 44-smb-storageclasses.yml.j2       # SMB CSI StorageClasses, one per smb_shares entry (only if smb_enabled)
     ├── 50-ceph-secrets.yml.j2            # Ceph client key Secret (always-on, group 50-56)
-    ├── 51-ceph-storageclasses.yml.j2     # RBD + CephFS StorageClasses
+    ├── 51-ceph-storageclasses.yml.j2     # RBD (Delete default + Retain) + CephFS StorageClasses
     ├── 55-ceph-csi-operator-config.yml.j2 # Driver / CephConnection / ClientProfile CRs
     ├── 56-ceph-network-policies.yml.j2   # ceph-csi-operator-system deny-all + targeted egress
     ├── 60-kube-prometheus-stack.yml.j2   # HelmChart CR: Prometheus + Operator + Grafana + Alertmanager + kube-state-metrics (only if observability_enabled, node-exporter disabled)
@@ -192,8 +192,9 @@ Here are some important variables based on the provided examples:
 | `certmanager_dns_credentials` | `[…]`                            | Per-provider DNS creds (Cloudflare/OVH/Infomaniak), each routed by `match_domains`; tokens are **vault-protected**. See `all.yml.example`. |
 | `certmanager_webhook_group_ovh` | `acme.myhomelab.example`        | OVH webhook `groupName` (must match the issuer); unique to you. |
 | `cephfs_subvolumegroup` | `csi`                                | The CephFS subvolume group used by the CephFS driver (must exist in Ceph). |
-| `ceph_sc_rbd_name`    | `ceph-rbd`                             | Name of the RBD StorageClass (the cluster default; `reclaimPolicy: Delete`). |
-| `ceph_sc_cephfs_name` | `ceph-cephfs`                          | Name of the CephFS StorageClass (`reclaimPolicy: Retain` — the subvolume survives an accidental PVC deletion; clean up orphaned subvolumes manually). |
+| `ceph_sc_rbd_name`    | `ceph-rbd`                             | RBD StorageClass, the cluster **default** (`reclaimPolicy: Delete` — fine for reproducible/throwaway state such as the observability PVCs; dangerous for data you can't regenerate). |
+| `ceph_sc_rbd_retain_name` | `ceph-rbd-retain`                 | RBD StorageClass, **opt-in** (`reclaimPolicy: Retain`) for important app data (DBs, anything non-reproducible). Pick the SC by **data value**, not storage type — the default is destructive. |
+| `ceph_sc_cephfs_name` | `ceph-cephfs`                          | CephFS StorageClass (`reclaimPolicy: Retain` — the subvolume survives an accidental PVC deletion; clean up orphaned subvolumes manually). |
 | `nfs_enabled`         | `false`                                | Deploy the NFS CSI driver + one StorageClass per entry in `nfs_shares`. `false` = nothing is installed. |
 | `nfs_csi_version`     | `v4.13.4`                              | Release tag of `kubernetes-csi/csi-driver-nfs` (raw manifests pulled from this tag). |
 | `nfs_shares`          | `[{name, server, share}]`              | One StorageClass per share (cluster-scoped, named after the share); `name` is the `storageClassName` to reference in a PVC. |
