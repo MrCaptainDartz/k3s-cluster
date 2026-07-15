@@ -21,10 +21,9 @@ spec:
     - port: metrics
       interval: {{ observability_scrape_interval }}
 ---
-# kube-vip (kube-system hostNetwork DaemonSet, metrics :2112). No Service -> PodMonitor.
-# The container declares port "metrics":2112 (added in 02-kube-vip-daemonset.yml.j2);
-# a PodMonitor can only scrape a DECLARED containerPort — numeric targetPort on a pod
-# that declares no port yields 0 targets (kubernetes-pods SD drops it on port resolve).
+# kube-vip (kube-system hostNetwork DaemonSet, metrics :2112, no Service -> PodMonitor).
+# PodMonitor can only scrape a DECLARED containerPort — numeric targetPort on a pod that declares
+# no port yields 0 targets (k8s-pods SD drops it on port resolve). Port "metrics":2112 added in 02-.
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
@@ -41,10 +40,8 @@ spec:
     - port: metrics
       interval: {{ observability_scrape_interval }}
 ---
-# Traefik (kube-system). The metrics entrypoint (:9100) is exposed on the traefik
-# LoadBalancer Service by the 12- HelmChartConfig (ports.metrics.expose), so a
-# ServiceMonitor on port "metrics" resolves. (LB exposure is safe: the cluster is
-# behind a central firewall that blocks external reach.)
+# Traefik (kube-system). Metrics entrypoint (:9100) exposed on the LB Service by 12- HelmChartConfig (ports.metrics.expose),
+# so a ServiceMonitor on port "metrics" resolves. LB exposure is safe (central firewall blocks external reach).
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -80,20 +77,9 @@ spec:
       interval: {{ observability_scrape_interval }}
 {% endif %}
 ---
-# MetalLB controller (metallb-system). Since MetalLB v0.16 the kube-rbac-proxy sidecar
-# was removed: :9120 (container port "metricshttps") serves /metrics DIRECTLY over HTTPS
-# with the self-signed webhook cert (CN=127.0.0.1) AND enforces bearer-token auth
-# (TokenReview + SubjectAccessReview on the nonResourceURL /metrics). So the scrape needs
-# BOTH tlsConfig.insecureSkipVerify (cert is NOT valid for the pod IP) AND a bearer token
-# from a ServiceAccount allowed to GET /metrics — without the token you get 401, with the
-# token but no tlsConfig you get a cert-verify failure. insecureSkipVerify MUST sit under
-# tlsConfig: a bare endpoint-level field is silently dropped by the operator (not part of
-# the endpoint schema). metallb is a raw manifest (K3s Addon 03-metallb-native) with no
-# chart-provided metrics RBAC, so the reader SA + long-lived token Secret + ClusterRole
-# (/metrics get) are created here, in the PodMonitor's namespace (the operator reads the
-# authorization Secret from the PodMonitor namespace). The 11- NP must allow :9120 (not
-# :7473) for the scrape to reach it. Pattern mirrored from the upstream metallb chart
-# (templates/podmonitor.yaml, PR #3081).
+# MetalLB controller (metallb-system). v0.16 removed kube-rbac-proxy: :9120 (port "metricshttps") serves /metrics over HTTPS
+# (self-signed webhook cert) + bearer-token auth (TokenReview/SAR). Scrape needs BOTH tlsConfig.insecureSkipVerify (cert NOT valid
+# for pod IP; MUST sit under tlsConfig — bare endpoint field silently dropped) AND a bearer token. Raw manifest -> reader SA+token+ClusterRole declared here; 11- NP must allow :9120.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -145,16 +131,9 @@ subjects:
     name: metallb-metrics-reader
     namespace: {{ observability_namespace }}
 ---
-# MetalLB v0.16 metrics auth (part 2): controller AND speaker validate the bearer token
-# via TokenReview + SubjectAccessReview. The K3s-packaged 03-metallb-native Addon ships a
-# STALE pre-v0.16 RBAC manifest that does NOT grant the controller OR speaker SA `create`
-# on tokenreviews/subjectaccessreviews — so the v0.16.1 image tries to authenticate the
-# scraper, fails to create the TokenReview (403 at the API), and returns HTTP 500 to the
-# scraper (both controller and speaker hit this). metallb is a raw manifest (not Helm) so
-# its Addon RBAC can't be edited (rewritten on reboot); instead we supplement it with this
-# ClusterRole+Binding binding BOTH the controller and speaker SAs, gated on
-# observability_enabled. Mirrors upstream chart templates/rbac.yaml (tokenreviews +
-# subjectaccessreviews create) for both components.
+# MetalLB v0.16 authreviews (controller+speaker): the K3s 03-metallb-native Addon ships STALE pre-v0.16 RBAC lacking `create` on
+# tokenreviews/subjectaccessreviews -> v0.16.1 fails the TokenReview (403) -> HTTP 500 to the scraper. Addon can't be edited (raw
+# manifest, rewritten on reboot), so supplement here: ClusterRole+Binding binds BOTH SAs. Mirrors upstream chart rbac.yaml.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -213,19 +192,9 @@ spec:
           key: token
       interval: {{ observability_scrape_interval }}
 ---
-# MetalLB speaker (metallb-system). The speaker is a hostNetwork DaemonSet that owns L2
-# advertisement — its metrics expose the per-node ARP/ND state, which is the data the
-# LB (your cluster's entry path) actually depends on. Same v0.16 scrape gauntlet as
-# the controller (same container port `metricshttps`:9120 over HTTPS with the webhook
-# cert, same bearer-token auth): REUSES the metallb-metrics-token Secret + the
-# metrics-reader ClusterRole already declared above (one token serves both components —
-# the token identifies the metrics-reader SA, which is allowed GET /metrics; the speaker
-# only needs to be able to RUN the TokenReview/SAR, granted by the metallb-authreviews
-# ClusterRoleBinding above which binds BOTH the controller and speaker SAs). The speaker
-# runs hostNetwork, so the PodMonitor scrapes the pod IP directly (kubernetes-pods SD
-# surfaces hostNetwork pods by their pod IP — already proven working by the kube-vip
-# PodMonitor). The 11- NP allow-ingress-from-prometheus selects `app: metallb` (covers
-# BOTH controller and speaker) on :9120.
+# MetalLB speaker (metallb-system hostNetwork DaemonSet, L2 adv): per-node ARP/ND state — the data the LB entry path depends on.
+# Same v0.16 gauntlet as controller (port "metricshttps":9120, HTTPS+bearer) — REUSES the metallb-metrics-token Secret + metrics-reader
+# ClusterRole above (one token serves both). hostNetwork -> PodMonitor scrapes pod IP directly (like kube-vip); 11- NP selects app:metallb on :9120.
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
@@ -250,12 +219,9 @@ spec:
           key: token
       interval: {{ observability_scrape_interval }}
 ---
-# ceph-csi-operator (ceph-csi-operator-system). The operator pod's selector label is
-# control-plane=ceph-csi-op-controller-manager (NOT app.kubernetes.io/name). NOTE: the
-# operator + the ceph-csi driver pods declare NO containerPort and bind no metrics
-# endpoint, so this stays 0/0 until the K3s-managed deployment is given a metrics
-# --bind-address + a declared containerPort — that is component-level work, out of this
-# template's scope. Left correctly configured so it comes up the moment metrics are on.
+# ceph-csi-operator (ceph-csi-operator-system). Selector label is control-plane=ceph-csi-op-controller-manager (NOT app.kubernetes.io/name).
+# Gotcha: operator + driver pods declare NO containerPort/bind no metrics endpoint -> 0/0 until given a metrics --bind-address +
+# declared containerPort (component-level, out of scope). Left configured so it comes up the moment metrics are on.
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:

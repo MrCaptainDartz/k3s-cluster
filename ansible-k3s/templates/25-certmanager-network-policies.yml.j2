@@ -1,13 +1,5 @@
 ---
-# cert-manager namespace: default-deny both directions + explicit allows only.
-# No other namespace is touched. Allowed flows:
-#   ingress: kube-apiserver (nodes) -> webhook :443  [from node_cidr]
-#   egress : DNS :53 anywhere (kube-dns for lookups + the authoritative NS of
-#            each issued domain, which cert-manager queries directly during its
-#            DNS-01 self-check before telling Let's Encrypt to verify)
-#   egress : kube-api :6443 [node_cidr]
-#   egress : TCP 443 anywhere (ACME + DNS-provider APIs; vanilla NP can't match
-#            FQDNs -> 0.0.0.0/0:443; Cilium toFQDNs is the future upgrade).
+# cert-manager namespace: deny-all + explicit allows (webhook ingress, DNS, kube-api, ACME :443).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -19,6 +11,9 @@ spec:
     - Ingress
     - Egress
 ---
+# Webhook listens on :10250 (Service maps 443->10250); kube-router enforces NP on
+# post-DNAT pod port, so allow 10250 not 443. API server source varies: cross-node
+# = node_cidr, same-node = cluster_cidr (cni0 gw); both required or certs 502.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -32,9 +27,11 @@ spec:
     - from:
         - ipBlock:
             cidr: "{{ node_cidr }}"
+        - ipBlock:
+            cidr: "{{ cluster_cidr }}"
       ports:
         - protocol: TCP
-          port: 443
+          port: 10250
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -46,11 +43,8 @@ spec:
   policyTypes:
     - Egress
   egress:
-    # kube-dns for ordinary cluster lookups, AND the authoritative nameservers of
-    # each issued domain (cert-manager's DNS-01 self-check resolves them via
-    # kube-dns then queries them directly on :53 to read the TXT record before
-    # asking Let's Encrypt to verify). Restricting :53 to kube-dns only breaks
-    # that self-check with "connection refused" on the authoritative NS.
+    # :53 must be 0.0.0.0/0, not just kube-dns: cert-manager's DNS-01 self-check
+    # queries the authoritative NS of each domain directly on :53 to read the TXT record.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0

@@ -5,18 +5,15 @@
 
 k3s_api_port: "6443"
 
-# K3s version. PINNED to a specific release (not the "stable" channel): the
-# stable channel is a moving target — a bump silently changes Traefik's chart
-# version (v2/v3, chart schema v39/v40), breaking the HelmChartConfig. Pinning
-# keeps the baseline reproducible. Bump deliberately and re-test the cluster.
+# K3s version. PINNED (not the moving "stable" channel): a bump silently changes
+# Traefik's chart version/schema and breaks the HelmChartConfig. Bump deliberately.
 k3s_release_version: "v1.36.2+k3s1"
 
 # Use embedded etcd as the datastore (recommended for 3 control planes)
 k3s_etcd_datastore: true
 
-# Scheduled etcd snapshots (embedded etcd only). Snapshots run on every
-# control-plane node and are stored under
-# /var/lib/rancher/k3s/server/db/snapshots/, pruned to k3s_etcd_snapshot_retention.
+# Scheduled etcd snapshots (embedded etcd only), stored under
+# /var/lib/rancher/k3s/server/db/snapshots/ and pruned to retention.
 # Restore with: `k3s etcd-snapshot ...` (see README).
 k3s_etcd_snapshot_cron: "0 */6 * * *"   # every 6 hours
 k3s_etcd_snapshot_retention: "28"       # ~7 days at 6h intervals
@@ -31,12 +28,8 @@ k3s_registration_address: "{{ k3s_vip }}"
 # K3s — Server (Control Plane) Configuration
 # ============================================================
 
-# Components to disable in K3s
-# - servicelb: replaced by MetalLB (Traefik's LoadBalancer Service gets a
-#   MetalLB IP)
-# - local-storage: we use Ceph (RBD/CephFS) + optional NFS/SMB CSI
-# Traefik is KEPT (the K3s-packaged Ingress Controller) and customized via a
-# HelmChartConfig — see the "Traefik (Ingress)" section below.
+# Disable servicelb (replaced by MetalLB) and local-storage (we use Ceph + NFS/SMB).
+# Traefik is kept and customized via HelmChartConfig (see Traefik section below).
 k3s_disabled_components:
   - servicelb
   - local-storage
@@ -46,9 +39,8 @@ k3s_server:
   tls-san:
     - "{{ k3s_vip }}"
   disable-cloud-controller: true
-  # 0600 (owner-only): /etc/rancher/k3s/k3s.yaml holds the cluster admin cert,
-  # so it must NOT be world/group-readable. 0644 would let any local user become
-  # cluster admin.
+  # 0600: /etc/rancher/k3s/k3s.yaml holds the cluster admin cert — must NOT be
+  # world/group-readable (0644 lets any local user become cluster admin).
   write-kubeconfig-mode: "0600"
   flannel-backend: "host-gw"
   etcd-snapshot-schedule-cron: "{{ k3s_etcd_snapshot_cron }}"
@@ -57,14 +49,9 @@ k3s_server:
 # ============================================================
 # CoreDNS — HA replica count
 # ============================================================
-# K3s ships CoreDNS as a managed Addon, but since v1.25.5 (PR #6552) the
-# packaged coredns manifest does NOT set spec.replicas — so scaling it
-# persists across k3s restarts (the addon controller won't reset it). There is
-# no K3s server flag for this (unlike etcd-snapshot-schedule-cron), so the
-# desired count is re-asserted by a post_tasks step in site.yml on every deploy.
-# The Deployment's built-in topologySpreadConstraints (maxSkew:1, DoNotSchedule
-# on hostname) spread the pods one-per-node, so 3 = HA: any single node loss
-# leaves DNS up with no gap.
+# CoreDNS addon has no replicas field since v1.25.5, so kubectl scale persists
+# and no K3s flag exists; re-asserted by a post_tasks step in site.yml.
+# topologySpread gives one-per-node HA (3 = survives one node loss, no DNS gap).
 coredns_replicas: 3
 
 # ============================================================
@@ -74,24 +61,22 @@ coredns_replicas: 3
 # Virtual IP address for the K3s API server (must be free on the network)
 k3s_vip: "192.168.1.10"
 
-# Network interface on the nodes where the VIP will be announced (ARP mode).
-# Left empty ("") -> auto-resolved by a pre_task in site.yml to the interface
-# whose subnet matches node_cidr (the VIP's network). This is robust on
-# multi-NIC nodes: a node may carry a separate storage network (e.g. the Ceph
-# subnet), and ansible_default_ipv4.interface (the default-route interface) is
-# not guaranteed to be the one carrying the VIP — pinning the wrong NIC makes
-# kube-vip announce the VIP on the storage network and the API unreachable.
-# Set explicitly (e.g. "ens18") to override the auto-detection.
+# Node interface for the VIP (ARP mode). Empty ("") -> auto-resolved by a pre_task
+# in site.yml to the NIC matching node_cidr (robust on multi-NIC nodes where the
+# default route may be a storage NIC). Set explicitly (e.g. "ens18") to override.
 k3s_vip_interface: ""
 
 # kube-vip container image and version
 kube_vip_image: "ghcr.io/kube-vip/kube-vip"
 kube_vip_version: "v1.2.1"
 
-# CIDR of the node network (control planes + workers). The kube-apiserver runs
-# as a process on the nodes, so the cert-manager NetworkPolicy allows ingress
-# from / egress to this CIDR (API on :6443, admission webhooks on :443).
+# Node network CIDR (control planes + workers); cert-manager NP allows API :6443 from here.
 node_cidr: "192.168.1.0/24"
+
+# Pod CIDR (k3s cluster-cidr). cert-manager admission webhook NP also allows the
+# API here: host-gw flannel sources same-node calls from cni0 gw (this CIDR),
+# cross-node from node IP (node_cidr). See 25-certmanager-network-policies.yml.j2.
+cluster_cidr: "10.42.0.0/16"
 
 # ============================================================
 # Ceph CSI
@@ -102,10 +87,10 @@ ceph_sc_cephfs_name: "ceph-cephfs"
 
 ceph_csi_operator_version: "v1.0.4"
 
-# Ceph user (e.g., admin or kubernetes)
+# Ceph user (e.g. admin or kubernetes)
 ceph_client_id: "admin"
 
-# Ceph user secret key (e.g., client.admin or client.kubernetes)
+# Ceph client secret key — SECRET, real value in gitignored all.yml only.
 ceph_client_key: "YOUR-CEPH-ADMIN-KEYRING-HERE"
 
 # Ceph monitor IPs
@@ -114,11 +99,9 @@ ceph_monitors:
   - "192.168.1.201"
   - "192.168.1.202"
 
-# CIDR of the Ceph (storage) network. The CSI provisioner connects to the
-# monitors AND to the OSDs directly (after fetching the OSD map), so the
-# Ceph NetworkPolicy (templates/56-ceph-network-policies.yml.j2) allows egress
-# to this whole subnet on the Ceph ports (3300 / 6789 / 6800-7300) rather than
-# only to the monitor IPs. Must cover monitors + OSDs + mgrs.
+# Ceph storage network CIDR. The CSI provisioner connects to monitors AND OSDs
+# directly, so the NP allows egress to this whole subnet (ports 3300/6789/6800-7300),
+# not just monitor IPs. Must cover monitors + OSDs + mgrs.
 ceph_subnet: "192.168.1.0/24"
 
 # Names of resources
@@ -135,8 +118,7 @@ cephfs_subvolumegroup: "csi"
 # MetalLB version to install
 metallb_version: "v0.16.1"
 
-# IP range for MetalLB to allocate to LoadBalancer services
-# Must be on the same L2 network as the nodes and not overlap with DHCP/static IPs
+# IP range for MetalLB (same L2 as nodes, no overlap with DHCP/static IPs)
 metallb_ip_range: "192.168.1.150-192.168.1.199"
 
 # Name of the MetalLB IP pool
@@ -145,28 +127,20 @@ metallb_pool_name: "default-pool"
 # ============================================================
 # Traefik (K3s-packaged Ingress Controller)
 # ============================================================
-# Kept enabled (not in k3s_disabled_components). Customized via a HelmChartConfig
-# (templates/12-traefik-config.yml.j2): runs as a DaemonSet (one per node),
-# redirects HTTP->HTTPS, enables the dashboard IngressRoute and drops the
-# anonymous usage calls. The rest uses the chart defaults (websecure TLS on ->
-# self-signed default cert). Only traefik_lb_ip is configurable here — it pins
-# Traefik's LoadBalancer Service to a fixed MetalLB IP via the metallb.io
-# annotation (the current prefix; metallb.universe.tf is deprecated since v0.14).
-# See the README "Traefik" section.
+# Kept (not disabled), customized via HelmChartConfig (12-traefik-config.yml.j2):
+# DaemonSet, HTTP->HTTPS redirect, dashboard IngressRoute, no usage calls. Only
+# traefik_lb_ip is set here (pins LB IP via metallb.io annotation; metallb.universe.tf
+# is deprecated since v0.14). See README.
 
-# Fixed MetalLB IP for Traefik's LoadBalancer Service. Must be within
-# metallb_ip_range and free. Last address of the pool by default.
+# Fixed MetalLB IP for Traefik's LB Service (within metallb_ip_range, free).
 traefik_lb_ip: "192.168.1.199"
 
 # ============================================================
 # cert-manager (optional) — real TLS via Let's Encrypt DNS-01
 # ============================================================
-# Flip certmanager_enabled to deploy cert-manager + Let's Encrypt ClusterIssuers
-# (staging + prod). When false, nothing is installed and Traefik keeps its
-# self-signed default cert. DNS providers (cloudflare built-in; ovh/infomaniak
-# via webhooks, deployed only when a cred of that provider is present) are routed
-# by domain. Tokens/keys are VAULT-protected (like ceph_client_key): put the real
-# values in the gitignored all.yml, never in this committed example.
+# Flip to deploy cert-manager + Let's Encrypt ClusterIssuers (staging + prod).
+# DNS providers (cloudflare built-in; ovh/infomaniak via webhooks) routed by
+# domain. Tokens/keys are SECRET — gitignored all.yml only, never in this example.
 certmanager_enabled: false
 
 # cert-manager release (official cert-manager.yaml is pulled from this tag).
@@ -175,23 +149,16 @@ certmanager_version: "v1.21.0"
 # Email registered with Let's Encrypt (expiry notices).
 certmanager_acme_email: "you@example.com"
 
-# ACME servers -> one ClusterIssuer each. Staging issues untrusted certs with no
-# rate-limit (use it for tests); prod issues real, browser-trusted certs.
+# ACME servers -> one ClusterIssuer each. Staging: untrusted, no rate-limit; prod: real.
 certmanager_acme_servers:
   - name: "letsencrypt-staging"
     server: "https://acme-staging-v02.api.letsencrypt.org/directory"
   - name: "letsencrypt-prod"
     server: "https://acme-v02.api.letsencrypt.org/directory"
 
-# DNS credentials -> one entry per (provider/token), routed by match_domains.
-# Each entry creates a Secret in cert-manager and one dns01 solver inside every
-# ClusterIssuer above. match_domains feed the solver's selector.dnsZones, so the
-# bare zone is enough: it covers the apex, the wildcard AND any concrete subdomain
-# (even multi-level). The "*.zone" entry is therefore optional/redundant — keep
-# just "example.tld". Fields depend on the provider:
-#   cloudflare : token
-#   ovh        : endpoint, application_key, application_secret, consumer_key
-#   infomaniak : token
+# DNS credentials: one entry per (provider/token), routed by match_domains. Bare
+# zone covers apex/wildcard/subdomains. Fields: cloudflare=token; ovh=endpoint,
+# application_key,application_secret,consumer_key; infomaniak=token.
 certmanager_dns_credentials:
   - name: "cloudflare-main"
     provider: "cloudflare"
@@ -212,34 +179,28 @@ certmanager_dns_credentials:
     token: "REDACTED"
     match_domains: ["third.tld"]
 
-# OVH webhook: groupName must match the webhook.groupName referenced by the OVH
-# solvers. Choose a unique value (your own domain is recommended).
+# OVH webhook: groupName must match the webhook.groupName in the OVH solvers (unique).
 certmanager_webhook_group_ovh: "acme.myhomelab.example"
 certmanager_webhook_ovh_chart_version: "0.9.14"
 certmanager_webhook_ovh_chart_repo: "https://aureq.github.io/cert-manager-webhook-ovh"
 
-# Infomaniak webhook: official rendered manifest (groupName acme.infomaniak.com
-# is baked in by the publisher).
+# Infomaniak webhook: official rendered manifest (groupName baked in by publisher).
 certmanager_webhook_infomaniak_version: "v0.3.1"
 
 # ============================================================
 # Observability (optional) — kube-prometheus-stack + Loki + Alloy
 # ============================================================
-# Flip observability_enabled to deploy the monitoring baseline (Prometheus +
-# Operator + Grafana + Alertmanager + kube-state-metrics, node-exporter DISABLED
-# in the bundle and installed separately; Loki logs; Alloy log shipper). All via
-# HelmChart CRs (group 60-65). monitoring=baseline (control plane),
-# observability-host=exempt (node-exporter + Alloy host DaemonSets). Secrets
-# (Telegram bot token, Grafana admin password) go in the gitignored all.yml only.
+# Flip to deploy the monitoring baseline (Prometheus+Operator+Grafana+Alertmanager+
+# kube-state-metrics; node-exporter separate; Loki logs; Alloy shipper) via HelmChart
+# CRs (60-65). Secrets (Telegram token, Grafana admin pw) — gitignored all.yml only.
 observability_enabled: false
 
 # Namespaces (match 13-pod-security.yml.j2 + the HelmChart targetNamespaces).
 observability_namespace: "monitoring"
 observability_host_namespace: "observability-host"
 
-# Chart repos + pinned versions (pin for reproducibility — bump deliberately).
-# Loki uses the community chart (grafana-community): the original grafana/helm-charts
-# loki is now GEL-only; we use filesystem storage on a PVC, so minio is disabled.
+# Chart repos + pinned versions (bump deliberately). Loki uses the community chart
+# (grafana/helm-charts loki is GEL-only); filesystem storage on PVC, minio disabled.
 observability_kps_chart_repo: "https://prometheus-community.github.io/helm-charts"
 observability_kps_chart_version: "87.15.1"
 observability_loki_chart_repo: "https://grafana-community.github.io/helm-charts"
@@ -256,44 +217,35 @@ observability_loki_retention: "7d"
 observability_loki_storage: "10Gi"
 observability_scrape_interval: "30s"
 
-# Grafana Ingress hostname (TLS added when certmanager_enabled) + the prod issuer
-# name (MUST match a certmanager_acme_servers entry).
+# Grafana Ingress hostname (TLS added when certmanager_enabled) + prod issuer name
+# (MUST match a certmanager_acme_servers entry).
 observability_grafana_hostname: "grafana.example.com"
 observability_grafana_tls_issuer: "letsencrypt-prod"
 
-# Alertmanager Telegram receiver (native telegram_configs). Bot token from
-# @BotFather; chat_id is an integer (negative for groups). Secrets — gitignored
-# all.yml only; REDACTED here. Leave chat_id 0 to mean "not configured".
+# Alertmanager Telegram receiver (native telegram_configs). bot_token from @BotFather;
+# chat_id is int (negative for groups). SECRET — gitignored all.yml only; 0=not configured.
 observability_alertmanager_telegram_bot_token: "REDACTED"
 observability_alertmanager_telegram_chat_id: 0
 
-# Grafana initial admin password (change after first login). Secret — real
-# value in the gitignored all.yml, REDACTED here.
+# Grafana initial admin password (change after first login). SECRET — gitignored all.yml only.
 observability_grafana_admin_password: "REDACTED"
 
 # ============================================================
 # NFS CSI (optional) — access existing NFS shares (e.g. a NAS export)
 # ============================================================
-# Set nfs_enabled to true to deploy the kubernetes-csi NFS driver and one
-# StorageClass per share listed in nfs_shares. When false, nothing is
-# downloaded, installed or configured. The NFS driver has no operator — it is
-# pulled as raw manifests, same pattern as MetalLB / ceph-csi-operator. Plain
-# NFS needs no credentials.
+# Set true to deploy the kubernetes-csi NFS driver + one StorageClass per share in
+# nfs_shares. No operator (raw manifests, like MetalLB/ceph-csi). Plain NFS, no creds.
 nfs_enabled: false
 
 # Release tag of kubernetes-csi/csi-driver-nfs
 nfs_csi_version: "v4.13.4"
 
-# Default mountOptions applied to every NFS StorageClass. A share can override
-# these with its own mount_options field.
+# Default mountOptions for every NFS StorageClass; a share can override via mount_options.
 nfs_mount_options:
   - "nfsvers=4.1"
 
-# One StorageClass is created per entry (cluster-scoped, named per share). Set
-# the list to [] to deploy only the driver with no StorageClass. Each share:
-#   name  -> StorageClass name (storageClassName to reference in a PVC)
-#   server/share -> NFS server address and export path
-#   mount_options -> optional, overrides nfs_mount_options for this share
+# One StorageClass per entry (cluster-scoped, named per share). Set [] for driver-only.
+# Each share: name (SC name), server, share (export path), mount_options (opt).
 nfs_shares:
   - name: "nfs-media"
     server: "nas.example.com"
@@ -308,22 +260,11 @@ nfs_shares:
 # ============================================================
 # SMB CSI (optional) — access existing SMB/CIFS shares (e.g. a NAS)
 # ============================================================
-# Set smb_enabled to true to deploy the kubernetes-csi SMB driver and one
-# StorageClass per share listed in smb_shares. When false, nothing is
-# downloaded, installed or configured. Like NFS, the SMB driver has no operator
-# — pulled as raw manifests.
-#
-# Credentials are ISOLATED PER NAMESPACE: each StorageClass resolves its Secret
-# in the PVC's OWN namespace via the ${pvc.namespace} token. This baseline does
-# NOT create that Secret — you create it (named smb_secret_name below) in every
-# namespace that consumes an SMB share, when you set up that application. See
-# the README for the manifest. The cluster all.yml therefore no longer holds
-# SMB credentials; they live with each application (vault-protected there).
-#
-# NOTE: the SMB node plugin bundles cifs-utils in its container image, so no
-# host package install is needed for username/password mounts. The host only
-# needs the `cifs` kernel module (present on standard Ubuntu kernels). Host
-# cifs-utils is required ONLY for Kerberos (sec=krb5) mounts.
+# Set true to deploy the kubernetes-csi SMB driver + one StorageClass per share.
+# Creds are PER-NAMESPACE: each StorageClass resolves its Secret (smb_secret_name)
+# in the PVC's own namespace via ${pvc.namespace} — you create it there, not here
+# (creds live with each app, vault-protected). cifs-utils bundled in node image;
+# host cifs-utils only for Kerberos (sec=krb5) mounts.
 smb_enabled: false
 
 # Release tag of kubernetes-csi/csi-driver-smb
@@ -332,9 +273,8 @@ smb_csi_version: "v1.20.3"
 # Name of the Secret the StorageClasses expect in each consuming namespace.
 smb_secret_name: "csi-smb-creds"
 
-# Default mountOptions applied to every SMB StorageClass. A share can override
-# these with its own mount_options field. These defaults match the upstream
-# example; noserverino is REQUIRED to avoid data corruption.
+# Default mountOptions for every SMB StorageClass; a share can override. noserverino
+# is REQUIRED to avoid data corruption.
 smb_mount_options:
   - "dir_mode=0777"
   - "file_mode=0777"
@@ -343,11 +283,8 @@ smb_mount_options:
   - "cache=strict"
   - "noserverino"
 
-# One StorageClass is created per entry (cluster-scoped, named per share). Set
-# the list to [] to deploy only the driver with no StorageClass. Each share:
-#   name -> StorageClass name (storageClassName to reference in a PVC)
-#   source -> SMB share UNC path, e.g. //nas/photos
-#   mount_options -> optional, overrides smb_mount_options for this share
+# One StorageClass per entry (cluster-scoped). Set [] for driver-only. Each share:
+#   name (SC name), source (UNC path e.g. //nas/photos), mount_options (opt).
 smb_shares:
   - name: "smb-photos"
     source: "//nas.example.com/photos"
@@ -375,13 +312,9 @@ k3s_server_manifests_templates:
 # ------------------------------------------------------------
 # Ceph CSI manifests (always-on primary storage, own group 50-56)
 # ------------------------------------------------------------
-# Ceph is the primary storage backend and is always deployed (no *_enabled
-# flag, unlike NFS/SMB). It lives in its own self-contained group like the
-# optional drivers below: site.yml (pre_tasks) appends these lists to
-# k3s_server_manifests_* unconditionally. The NetworkPolicy for the Ceph
-# operator namespace ships here too (56-), after the operator (54-) which
-# creates that namespace — so the namespace exists when the NP is applied.
-# K3s auto-deploy is fire-and-forget in filename order, so 54-before-56 matters.
+# Ceph is always-on primary storage (no *_enabled flag); site.yml appends these
+# unconditionally. 54- creates the operator namespace, so 56- NP must come after
+# (fire-and-forget, applied in filename order).
 ceph_manifest_urls:
   - url: "https://raw.githubusercontent.com/ceph/ceph-csi-operator/{{ ceph_csi_operator_version }}/deploy/multifile/crd.yaml"
     filename: 52-ceph-csi-operator-crd.yaml
@@ -399,24 +332,16 @@ ceph_manifest_templates:
 # ------------------------------------------------------------
 # Optional CSI driver manifests (NFS / SMB)
 # ------------------------------------------------------------
-# These sub-lists are NOT part of k3s_server_manifests_urls /
-# k3s_server_manifests_templates by default. site.yml (pre_tasks) appends them
-# to those lists only when the matching *_enabled flag is true. Inline {% if %}
-# is not valid inside a YAML list in a vars file, which is why the conditional
-# composition happens in the playbook rather than here.
+# These sub-lists are NOT part of k3s_server_manifests_* by default; site.yml
+# appends them only when the matching *_enabled flag is true (an inline Jinja
+# if-tag is invalid in a YAML list in a vars file, so composition happens in the playbook).
 #
-# Manifest numbering (no overlap between ranges, all land in the same
-# /var/lib/rancher/k3s/server/manifests/ dir, applied in filename order):
-#   01-13  baseline (kube-vip, MetalLB, network policies, Traefik, Pod Security)
-#           -> k3s_server_manifests_*
+# Manifest numbering (applied in filename order, no overlap):
+#   01-13  baseline (kube-vip, MetalLB, NP, Traefik, Pod Security) -> k3s_server_manifests_*
 #   20-26  cert-manager (url 20-21 + templates 22-26)
-#   30-34  NFS CSI (url 30-33 + StorageClasses 34)
-#   40-44  SMB CSI (url 40-43 + StorageClasses 44)
-#   50-56  Ceph CSI (url 52-54 + templates 50,51,55,56) — always-on
-#   60-65  Observability (kube-prometheus-stack + Loki + Alloy + node-exporter,
-#           all HelmChart CRs) — opt-in
-# Within a range the driver/CRDs come before the StorageClasses/policies that
-# depend on them.
+#   30-34  NFS CSI | 40-44  SMB CSI
+#   50-56  Ceph CSI (always-on) | 60-65  Observability (HelmChart CRs, opt-in)
+# Within a range driver/CRDs come before the StorageClasses/policies that depend on them.
 nfs_manifest_urls:
   - url: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/{{ nfs_csi_version }}/deploy/{{ nfs_csi_version }}/rbac-csi-nfs.yaml"
     filename: 30-nfs-rbac.yaml
@@ -444,11 +369,9 @@ smb_manifest_templates:
 # ------------------------------------------------------------
 # Optional cert-manager manifests
 # ------------------------------------------------------------
-# Like NFS/SMB, these sub-lists are NOT part of k3s_server_manifests_urls /
-# k3s_server_manifests_templates by default. site.yml (pre_tasks) appends them
-# when certmanager_enabled is true. The DNS webhooks (OVH/Infomaniak) are added
-# only when at least one credential of the matching provider is present
-# (computed in site.yml from certmanager_dns_credentials).
+# Like NFS/SMB, not part of k3s_server_manifests_* by default; site.yml appends
+# when certmanager_enabled. DNS webhooks (OVH/Infomaniak) added only when a cred
+# of that provider is present (computed in site.yml from certmanager_dns_credentials).
 certmanager_manifest_urls:
   - url: "https://github.com/cert-manager/cert-manager/releases/download/{{ certmanager_version }}/cert-manager.yaml"
     filename: 20-cert-manager.yaml
@@ -466,9 +389,8 @@ certmanager_webhook_infomaniak_urls:
 # ------------------------------------------------------------
 # Optional observability manifests
 # ------------------------------------------------------------
-# Appended to k3s_server_manifests_* by site.yml only when observability_enabled.
-# All six are HelmChart CRs (no raw URLs). 65- (ServiceMonitors/Rules) needs the
-# Prometheus Operator CRDs from 60- -> applies on the 2nd boot (fire-and-forget).
+# Appended by site.yml only when observability_enabled. All are HelmChart CRs (no URLs).
+# 65- (ServiceMonitors/Rules) needs 60- CRDs -> applies on 2nd boot (fire-and-forget).
 observability_manifest_urls: []
 observability_manifest_templates:
   - 60-kube-prometheus-stack.yml.j2

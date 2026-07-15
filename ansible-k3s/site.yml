@@ -3,14 +3,9 @@
   hosts: k3s_cluster
   gather_facts: true
   pre_tasks:
-    # Resolve the node interface that carries the kube-vip VIP. The default in
-    # all.yml is empty ("") -> auto-detect here, which is robust on multi-NIC
-    # nodes: we pick the interface whose IPv4 network matches node_cidr (the
-    # VIP's network) instead of relying on ansible_default_ipv4.interface (the
-    # default-route interface, which can be a separate storage NIC). The role
-    # consumes k3s_vip_interface when rendering the kube-vip DaemonSet, so this
-    # must run before the role. A non-empty explicit value in all.yml overrides
-    # this whole block (the when guards skip it).
+    # Resolve the kube-vip interface: auto-detect the NIC whose ipv4.network
+    # matches node_cidr (the VIP's network) instead of the default route (can be
+    # a separate storage NIC). An explicit all.yml value overrides this block.
     - name: Auto-resolve the kube-vip interface from the VIP subnet
       ansible.builtin.set_fact:
         k3s_vip_interface: "{{ item.device }}"
@@ -24,9 +19,8 @@
         }}
       when:
         - k3s_vip_interface | length == 0
-          # node_cidr is network-form (e.g. 10.20.4.0/24); strip the /prefix to get
-          # the network and compare to each interface's own ipv4.network fact. Avoids
-          # the ipaddr filter (needs the netaddr Python lib, not always installed).
+          # node_cidr is network-form (e.g. 10.20.4.0/24); strip the /prefix to
+          # compare to ipv4.network. Avoids ipaddr filter (needs netaddr lib).
         - item.ipv4.network == (node_cidr | split('/') | first)
 
     - name: Fail if the kube-vip interface could not be resolved
@@ -37,15 +31,9 @@
           k3s_vip_interface explicitly in inventory/group_vars/all.yml.
       when: k3s_vip_interface | length == 0
 
-    # Compose the K3s auto-deploy manifest lists. Ceph CSI is the always-on
-    # primary storage (no *_enabled flag) and gets its own group appended
-    # unconditionally; the NFS/SMB CSI drivers and cert-manager are optional and
-    # appended only when their *_enabled flag is true. Inline {% if %} is not
-    # valid inside a YAML list in a vars file, so the composition is done here:
-    # host-scoped facts override the group_vars base lists, which the
-    # xanmanning.k3s role then consumes. When an optional driver is disabled
-    # (*_enabled: false), its sub-list is skipped entirely — nothing is
-    # downloaded, installed or configured.
+    # Compose the K3s auto-deploy manifest lists here: an inline Jinja if-tag is
+    # invalid in a YAML list in a vars file, so conditional appends happen here.
+    # Ceph CSI is always-on; NFS/SMB/cert-manager/observability are *_enabled-gated.
     - name: Append Ceph CSI manifests (always-on primary storage, group 50-56)
       ansible.builtin.set_fact:
         k3s_server_manifests_urls: >-
@@ -74,10 +62,8 @@
             + (smb_enabled | bool | ternary(smb_manifest_templates, []))
           }}
 
-    # cert-manager: append the base manifests (operator, DNS-cred Secrets,
-    # issuers, NetworkPolicy) when enabled, plus each DNS webhook ONLY if at
-    # least one credential of its provider is present. The webhook-needed flags
-    # guard against deploying an unused webhook component.
+    # cert-manager: append base manifests when enabled, plus each DNS webhook
+    # only if a credential of its provider is present (guards unused webhooks).
     - name: Append optional cert-manager manifests when enabled
       ansible.builtin.set_fact:
         k3s_server_manifests_urls: >-
@@ -97,8 +83,7 @@
                | ternary(certmanager_webhook_ovh_templates, []))
           }}
 
-    # Observability (kube-prometheus-stack + Loki + Alloy + node-exporter):
-    # opt-in, all HelmChart CRs (group 60-65). Nothing installed unless enabled.
+    # Observability (kube-prometheus-stack + Loki + Alloy + node-exporter): opt-in, all HelmChart CRs (60-65).
     - name: Append optional observability manifests when enabled
       ansible.builtin.set_fact:
         k3s_server_manifests_urls: >-
@@ -114,14 +99,9 @@
   roles:
     - role: xanmanning.k3s
 
-  # CoreDNS is shipped by K3s as a managed Addon, but since v1.25.5 (PR #6552)
-  # the packaged coredns manifest carries NO spec.replicas — so a manual scale
-  # is NOT reset by the addon controller on restart, and there is no server
-  # flag to set it (unlike etcd-snapshot-schedule-cron). The durable way to pin
-  # a HA replica count is therefore to re-assert it here on every deploy, on the
-  # first control plane only (avoids three concurrent scales racing). The
-  # Deployment's built-in topologySpreadConstraints spread the pods one-per-node,
-  # so coredns_replicas=3 survives any single node loss with zero DNS gap.
+  # CoreDNS addon has no replicas field since v1.25.5, so kubectl scale persists
+  # and no K3s flag exists; re-assert coredns_replicas here on every deploy (first
+  # control plane only to avoid races; topologySpread gives one-per-node HA).
   post_tasks:
     - name: Wait for CoreDNS Deployment to exist
       ansible.builtin.command:
@@ -172,14 +152,8 @@
         - (coredns_current_replicas.stdout | int) != (coredns_replicas | int)
 
     # ------------------------------------------------------------
-    # Post-deploy verification — assert the key platform components actually
-    # came up, on the first control plane only. K3s auto-deploys manifests from
-    # /var/lib/rancher/k3s/server/manifests/, but those are fire-and-forget: a
-    # malformed manifest or a failing pod leaves the playbook reporting success.
-    # `kubectl rollout status` returns non-zero until the resource exists AND is
-    # rolled out, so each task retries until rc==0 (covers the existence race on
-    # a fresh deploy too). A failure here now fails the playbook — surfacing a
-    # real problem instead of a silent partial cluster.
+    # Post-deploy verification: K3s auto-deploy is fire-and-forget, so failures
+    # would otherwise report success; rollout status retries until rc==0.
     # ------------------------------------------------------------
     - name: Verify Traefik DaemonSet is rolled out
       ansible.builtin.command:
@@ -297,9 +271,8 @@
         - smb_enabled | bool
 
     # ------------------------------------------------------------
-    # Observability verification — HelmChart CRs apply fire-and-forget; these
-    # rollout checks confirm the pods came up. ServiceMonitors/Rules (65-) need
-    # the 60- CRDs and apply on the 2nd boot (same caveat as cert-manager issuers).
+    # Observability verification: 65- ServiceMonitors/Rules need the 60- CRDs
+    # and apply on the 2nd boot (fire-and-forget, same as cert-manager issuers).
     # ------------------------------------------------------------
     - name: Verify Prometheus is rolled out
       ansible.builtin.command:

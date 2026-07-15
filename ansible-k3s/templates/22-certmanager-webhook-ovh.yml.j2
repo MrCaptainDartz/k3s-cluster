@@ -1,7 +1,5 @@
 ---
-# OVH DNS-01 webhook for cert-manager (aureq chart, via a HelmChart CR).
-# Deployed only when certmanager_enabled AND an OVH cred exists (site.yml).
-# groupName MUST match the OVH solvers in 24-certmanager-issuers.yml.j2.
+# OVH DNS-01 webhook for cert-manager (HelmChart CR); deployed when certmanager_enabled + OVH cred exists. groupName MUST match 24- issuers.
 apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:

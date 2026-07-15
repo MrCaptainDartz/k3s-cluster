@@ -1,48 +1,9 @@
 ---
-# ============================================================
-# Baseline NetworkPolicies — cluster zero-trust
-# ============================================================
-# K3s enforces NetworkPolicy out of the box via its embedded kube-router
-# network-policy controller (active by default alongside the Flannel CNI).
-# No policies are shipped by default, so the pod network is otherwise flat:
-# every pod can reach every pod, across all namespaces.
-#
-# This manifest installs a ZERO-TRUST cluster baseline: deny ALL ingress AND
-# egress in two namespaces, then re-open only the minimal egress each system
-# component needs. `kube-system` gets NO policy (see below). The Ceph operator
-# namespace (ceph-csi-operator-system) is handled separately by
-# 56-ceph-network-policies.yml.j2 (same pattern, co-located with the Ceph CSI
-# group 50-56). Application namespaces use the same deny-all + targeted-allow
-# pattern — see the ansible-k3s README "Securing a new namespace" tutorial.
-#
-# Why deny-all-both here (and not just ingress)? The previous baseline left
-# egress open; zero-trust closes outbound too, so a compromised pod in these
-# namespaces cannot phone home or scan the storage/api networks. Each allow
-# below names exactly what its component legitimately needs.
-#
-# What is NOT affected / NOT enforced:
-#   - kube-system:  no policy at all. Its critical components (CoreDNS, kube-proxy,
-#                   metrics-server, Traefik, kube-vip) need broad connectivity and
-#                   run partly hostNetwork; locking it down on K3s is risky and
-#                   out of scope. Pods in OTHER namespaces still reach kube-dns
-#                   because DNS egress is explicitly allowed below.
-#   - Probes:       kubelet liveness/readiness probes (node-to-pod) are exempt
-#                   from NetworkPolicy — node-originated traffic is not enforced.
-#   - Admission     webhooks (cert-manager, metallb) are called by the kube-apiserver,
-#                   which runs as a host process (not a pod) — that traffic is also
-#                   node-originated and therefore exempt, so the deny-ingress below
-#                   does NOT break webhook validation.
-#   - hostNetwork:  kube-router does NOT enforce NP on hostNetwork pods. The MetalLB
-#                   speakers run hostNetwork, so the metallb-system policy only
-#                   applies to the controller (which is what we protect — it does
-#                   leader election / watch / allocation), not to the speakers
-#                   themselves. (The Ceph CSI node plugins are likewise hostNetwork;
-#                   their namespace policy lives in 56-ceph-network-policies.yml.j2.)
-# ============================================================
+# Baseline NetworkPolicies — cluster zero-trust deny-all + targeted egress.
+# kube-router (K3s default) enforces NP; hostNetwork pods and node-origin
+# traffic (kubelet probes, apiserver->webhook) are NOT enforced.
 
-# 1. default — strict quarantine. A pod that lands here can only resolve DNS;
-#    it cannot be reached and cannot reach anything else. Deploy real apps in a
-#    dedicated namespace (see README), not in `default`.
+# default — strict quarantine: DNS only, no reach in/out.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -77,10 +38,7 @@ spec:
         - protocol: TCP
           port: 53
 ---
-# 2. metallb-system — deny all, then let the controller reach the API server
-#    (leader election + watch) and DNS. Speakers run hostNetwork (not enforced);
-#    the controller's webhook is served to the kube-apiserver (node-origin,
-#    exempt — see header). Nothing else legitimately reaches MetalLB pods.
+# metallb-system — controller egress to kube-api + DNS. Speakers hostNetwork (not enforced).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -132,14 +90,8 @@ spec:
         - protocol: TCP
           port: 53
 ---
-# Prometheus scrape allow (only if observability_enabled) — :9120 metrics
-# (metricshttps, served over HTTPS with the webhook cert — NOT :7473) for BOTH the
-# controller and the speaker, which both expose container port `metricshttps`:9120 with
-# the same v0.16 bearer-token auth. podSelector matches `app: metallb` so it covers
-# both components (controller: regular pod, enforced; speaker: hostNetwork, on which
-# kube-router does NOT enforce NP — see header — so the speaker is reachable via the
-# hostNetwork bypass regardless, but selecting it here is belt-and-suspenders in case
-# that ever changes).
+# Prometheus scrape allow (if observability) — :9120 (HTTPS, webhook cert, bearer-token).
+# podSelector app: metallb covers controller + speaker (speaker is hostNetwork, not enforced).
 {% if observability_enabled | bool %}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

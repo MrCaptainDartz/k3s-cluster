@@ -1,7 +1,6 @@
 ---
-# Loki via HelmChart CR — monolithic, filesystem storage on a ceph-rbd PVC.
-# Opt-in; targetNamespace monitoring. Release "loki" -> loki.monitoring.svc:3100.
-# Community chart (grafana-community): grafana/helm-charts loki is GEL-only now.
+# Loki via HelmChart CR — monolithic, filesystem storage on a ceph-rbd PVC, targetNamespace monitoring.
+# Release "loki" -> loki.monitoring.svc:3100. Community chart (grafana/helm-charts loki is GEL-only now).
 apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:
@@ -37,8 +36,7 @@ spec:
       compactor:
         working_directory: /var/loki/data/retention
         retention_enabled: true
-        # filesystem store (common.storage.filesystem) holds delete requests when
-        # retention is on — Loki refuses to start without this set.
+        # filesystem store holds delete requests when retention is on — Loki refuses to start without it.
         delete_request_store: filesystem
         retention_delete_delay: 2h
       limits_config:
@@ -54,11 +52,9 @@ spec:
         size: {{ observability_loki_storage }}
         storageClass: {{ ceph_sc_rbd_name }}
 
-    # Zero out the non-monolithic targets. The chart defaults write/read/backend to
-    # replicas: 3 (SimpleScalable); leaving them set alongside singleBinary.replicas:1
-    # fails the chart validation ("replicas for both monolithic and simple scalable").
-    # chunksCache/resultsCache default to enabled too (memcached STSs) — off in
-    # Monolithic; the singleBinary caches in-process, no separate memcached needed.
+    # Zero out non-monolithic targets: chart defaults write/read/backend to replicas:3
+    # (SimpleScalable); leaving them alongside singleBinary.replicas:1 fails chart validation.
+    # Disable chunksCache/resultsCache (memcached STSs) — singleBinary caches in-process.
     backend:        { replicas: 0 }
     read:           { replicas: 0 }
     write:          { replicas: 0 }

@@ -1,66 +1,7 @@
 ---
-# ============================================================
-# Pod Security Standards (PSS) — cluster baseline admission control
-# ============================================================
-# PSS is Kubernetes' built-in LABEL-BASED admission control (it replaced the
-# PodSecurityPolicy, removed in v1.25). A Namespace labelled
-#   pod-security.kubernetes.io/enforce=<level>   -> REJECT pods exceeding <level>
-#   pod-security.kubernetes.io/audit=<level>      -> only log them to the audit log
-#   pod-security.kubernetes.io/warn=<level>       -> only warn the API caller
-# Levels: privileged (no policy), baseline (blocks the real escape vectors),
-# restricted (baseline + runAsNonRoot / drop ALL caps / seccomp=RuntimeDefault —
-# breaks many unmodified images). The three modes can use different levels.
-#
-# Baseline policy applied here (both Namespaces are patched/created by this
-# manifest; re-applying just re-asserts the labels — idempotent, self-healing
-# across k3s restarts):
-#   default       : enforce=baseline, audit=restricted, warn=restricted
-#     - enforce=baseline  blocks privileged / hostPath / hostNetwork / hostPID
-#       pods. `default` is the strict-quarantine namespace (see
-#       11-network-policies.yml.j2): no real app belongs there, so baseline
-#       breaks nothing while closing escape vectors on anything that lands there.
-#     - audit+warn=restricted  log/warn (NOT block) pods that *could* be hardened
-#       further, so you can migrate gradually without breakage.
-#   cert-manager  : SAME (enforce=baseline, audit=restricted, warn=restricted),
-#     only when certmanager_enabled. Unlike the exempt namespaces below,
-#     cert-manager has NO privileged/hostNetwork/hostPath pod — controller,
-#     webhook, cainjector and the OVH webhook are all plain pods, so baseline
-#     breaks nothing and adds defense-in-depth on a namespace that already has
-#     a deny-all NetworkPolicy (25-certmanager-network-policies.yml.j2). The
-#     official cert-manager.yaml (20-) creates this namespace; this manifest
-#     pre-creates it with the labels, then 20- patches it (idempotent).
-#   cert-manager-infomaniak : SAME, only when certmanager_enabled AND at least
-#     one Infomaniak cred is present (the same condition site.yml uses to deploy
-#     the webhook). The official rendered-manifest (21-) creates this separate
-#     namespace for the Infomaniak webhook; this manifest pre-creates it with the
-#     labels, then 21- patches it (idempotent). The Infomaniak webhook is a
-#     plain pod too, so baseline is safe there.
-#   monitoring  : SAME (enforce=baseline, audit=restricted, warn=restricted), only
-#     when observability_enabled. The stateful control plane (Prometheus, Grafana,
-#     Loki, Alertmanager, kube-state-metrics) — all plain pods, so baseline breaks
-#     nothing. Pre-created here with the labels, patched by 60-/61- (idempotent).
-#     The host DaemonSets that violate baseline (node-exporter, Alloy) live in the
-#     exempt `observability-host` namespace (created unlabelled below).
-#   restricted is NOT enforced anywhere automatically: too many images do not
-#   comply (runAsNonRoot etc.) and it would turn the baseline into friction.
-#   Opt into it per sensitive namespace when you create one.
-#
-# Intentionally NOT labelled (= privileged, no enforcement) — these hold system
-# pods that legitimately need privileged / hostNetwork and would break under
-# baseline:
-#   kube-system               (kube-vip, Traefik, CoreDNS, kube-proxy, metrics-server)
-#   metallb-system            (speaker DaemonSet runs hostNetwork)
-#   ceph-csi-operator-system  (CSI node plugins run privileged + hostNetwork)
-#   observability-host        (when observability_enabled — node-exporter +
-#                             Alloy use hostNetwork/hostPID/hostPath; isolated here
-#                             instead of weakening baseline-enforced `monitoring`)
-# An unlabelled namespace has NO PSA enforcement, which is the correct default
-# for them. (K3s sets no cluster-wide default profile, so "unlabelled" is truly
-# unrestricted — there is nothing to override.)
-#
-# Application namespaces: create them with enforce=baseline — see the README
-# "Securing a new namespace" tutorial (Step 1).
-# ============================================================
+# PSS: label-based namespace admission. Labelled ns: enforce=baseline, audit+warn=restricted.
+# Unlabelled ns (kube-system, metallb-system, ceph-csi-operator-system, observability-host)
+# stay privileged — K3s sets no cluster-wide default so unlabelled is truly unrestricted.
 apiVersion: v1
 kind: Namespace
 metadata:

@@ -1,9 +1,7 @@
 ---
-# Zero-trust NPs for monitoring + observability-host (same pattern as 11-/56-).
-# monitoring: deny-all INGRESS (egress open — Prometheus is a privileged observer);
-#   ingress allows Traefik->Grafana, Alloy->Loki, intra-ns self-scrape.
-# observability-host: deny-all ingress; egress Loki:3100 + DNS. node-exporter is
-# hostNetwork so kube-router does NOT enforce NP on it anyway.
+# Zero-trust NPs for monitoring + observability-host.
+# monitoring: deny ingress, allow Traefik->Grafana, Alloy->Loki, intra-ns scrape.
+# observability-host: deny ingress; egress Loki + DNS. node-exporter is hostNetwork (NP not enforced).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

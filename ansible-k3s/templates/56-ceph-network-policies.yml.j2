@@ -1,32 +1,7 @@
 ---
-# ============================================================
-# Ceph CSI NetworkPolicies — zero-trust for ceph-csi-operator-system
-# ============================================================
-# Same deny-all + targeted-egress pattern as the baseline
-# (11-network-policies.yml.j2), applied to the Ceph operator namespace. Split
-# out of the baseline manifest so the whole Ceph CSI stack lives in its own
-# self-contained group (50-56) — like NFS (20-24) / SMB (30-34) / cert-manager
-# (40-46). The baseline (11-) no longer references this namespace, so the two
-# are independent and can be applied in any relative order.
-#
-# Ordering within this group: the operator (54-ceph-csi-operator.yaml) creates
-# the ceph-csi-operator-system namespace; this manifest (56) comes after it, so
-# the namespace exists when these NetworkPolicies are applied. K3s auto-deploy
-# is fire-and-forget and applies in filename order, so 54-before-56 matters.
-#
-# What this protects: the operator + ctrlplugin (provisioner) pods, which hold
-# the Ceph client Secret and drive RBD/CephFS provisioning. The CSI node
-# plugins run hostNetwork, so kube-router does NOT enforce NP on them (same
-# exemption as the MetalLB speakers) — this is about the control-plane pods.
-#
-# Egress re-opened:
-#   - Ceph cluster on ceph_subnet: mon msgr2 3300, mon msgr1 6789,
-#     OSD/mgr 6800-7300 (endPort, supported by kube-router). The provisioner
-#     connects to the monitors AND to the OSDs directly (after fetching the
-#     OSD map), so the allow targets the whole ceph_subnet, not just monitor IPs.
-#   - API server on node_cidr:6443 (watch + leader election).
-#   - DNS :53 to kube-dns (for service-name resolution).
-# ============================================================
+# Ceph CSI NetworkPolicies — deny-all + targeted egress for ceph-csi-operator-system.
+# Operator (54-) creates the ns; this (56) applies after. CSI node plugins run
+# hostNetwork (not enforced). Egress: ceph_subnet (mon 3300/6789, OSD/mgr 6800-7300), kube-api, DNS.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -100,8 +75,7 @@ spec:
         - protocol: TCP
           port: 53
 ---
-# Prometheus scrape allow (only if observability_enabled) — operator metrics :8081.
-# Verify the port matches the operator's bind; adjust here + the 65- PodMonitor.
+# Prometheus scrape allow (if observability) — operator metrics :8081.
 {% if observability_enabled | bool %}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

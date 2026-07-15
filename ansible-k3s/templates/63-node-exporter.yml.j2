@@ -1,7 +1,6 @@
 ---
-# prometheus-node-exporter via HelmChart CR — DaemonSet in observability-host (exempt).
-# Separate from KPS (disabled in 60-): chart defaults use hostNetwork+hostPID+hostPath.
-# Release "prometheus-node-exporter" -> Service :9100 (65- scrapes it).
+# prometheus-node-exporter via HelmChart CR — DaemonSet in observability-host (exempt); separate from KPS (disabled in 60-).
+# Chart defaults use hostNetwork+hostPID+hostPath (why it's in the exempt ns); Service :9100 (65- scrapes it).
 apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:

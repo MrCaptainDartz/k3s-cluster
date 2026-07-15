@@ -38,9 +38,7 @@ spec:
       - name: kube-vip
         image: "{{ kube_vip_image }}:{{ kube_vip_version }}"
         imagePullPolicy: IfNotPresent
-        # Declared so the 65- PodMonitor can resolve port "metrics" (kube-vip serves
-        # Prometheus metrics on :2112 via prometheus_server, but declares no port by
-        # default — PodMonitor can only scrape a declared containerPort).
+        # PodMonitor can only scrape a declared containerPort; kube-vip serves :2112 but declares none by default.
         ports:
         - name: metrics
           containerPort: 2112

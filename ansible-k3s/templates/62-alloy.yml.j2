@@ -1,18 +1,7 @@
 ---
-# Alloy log shipper via HelmChart CR — DaemonSet in observability-host (exempt).
-# FILE-based collection: tails /var/log/pods (hostPath) with loki.source.file +
-# local.file_match, pushes to Loki in monitoring. Pod network (not hostNetwork):
-# only hostPath violates baseline, and pod-net lets 64- egress NP bind.
-#
-# Why file-based and NOT the API-based loki.source.kubernetes the chart ships with
-# by default: the 64- egress NP for observability-host allows ONLY Loki:3100 +
-# DNS:53 (zero-trust). The API-based source needs the kube-apiserver (pods/log
-# subresource) to discover + tail pods, which that NP blocks -> discovery.kubernetes
-# gets 0 events across every role -> 0 targets -> ZERO logs shipped. File-based
-# reads the node's filesystem only, so it works under the NP unchanged. Bonus: a
-# DaemonSet file collector tails only its OWN node's files (no 3x duplication that
-# an un-filtered API-based DaemonSet would cause) and keeps read positions for
-# across-restart continuity.
+# Alloy log shipper via HelmChart CR — DaemonSet in observability-host (exempt), FILE-based (tails /var/log/pods hostPath).
+# File-based not API-based: 64- egress NP allows ONLY Loki:3100+DNS:53, so loki.source.kubernetes can't reach the
+# kube-apiserver -> 0 targets -> zero logs. File reads node fs only; pod-net binds the NP; DaemonSet = no 3x duplication.
 apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:
@@ -29,15 +18,9 @@ spec:
       hostNetwork: false
 
     alloy:
-      # Mount /var/log from the host so loki.source.file can tail the pod log files
-      # at /var/log/pods/<ns>_<pod>_<uid>/<container>/*.log. K3s writes pod logs as
-      # REAL files here (not symlinks to a runtime dir), so this single mount
-      # suffices — no /var/lib/docker/containers path needed. Alloy runs as root
-      # (chart default) and so can read the root-owned (-rw-r----- root root) logs.
-      # NOTE: the chart's correct keys are `alloy.mounts.*` (container mounts) and
-      # `controller.volumes.*` (pod volumes); the top-level `extraVolumes`/
-      # `extraVolumeMounts` keys are SILENTLY IGNORED (they look valid but mount
-      # nothing -> /var/log/pods absent in the container -> zero logs shipped).
+      # Mount /var/log so loki.source.file tails /var/log/pods/<ns>_<pod>_<uid>/<container>/*.log. K3s writes
+      # REAL files here (no /var/lib/docker/containers needed). Gotcha: top-level `extraVolumes`/
+      # `extraVolumeMounts` are SILENTLY IGNORED — use `alloy.mounts.*` (container) + `controller.volumes.*` (pod).
       mounts:
         varlog: true
       configMap:
@@ -48,16 +31,9 @@ spec:
             format = "logfmt"
           }
 
-          // Discover pod log files on THIS node. K3s writes pod logs as real files
-          // at /var/log/pods/<ns>_<pod>_<uid>/<container>/<id>.log (mounted via
-          // alloy.mounts.varlog). local.file_match reads the filesystem (fsnotify) —
-          // NO kube-apiserver access — so it works under the 64- egress NP (Loki:3100
-          // + DNS:53 only); the API-based loki.source.kubernetes the chart defaults
-          // to canNOT reach the API server under that NP (0 discovery events -> no
-          // logs). DaemonSet => each collector tails only its own node => no 3x
-          // duplication. Positions live in --storage.path (/tmp/alloy, ephemeral):
-          // a collector restart re-reads existing files once; persist on a hostPath
-          // later if that matters.
+          // Discover pod logs on THIS node via local.file_match (fsnotify, reads fs — NO kube-apiserver access,
+          // works under the 64- NP). DaemonSet tails only its own node (no 3x duplication). Positions live in
+          // --storage.path (/tmp/alloy, ephemeral): restart re-reads existing files once; persist later if needed.
           local.file_match "pods" {
             path_targets = [
               {
@@ -66,10 +42,8 @@ spec:
             ]
           }
 
-          // Derive labels from the __path__ and add the node name from the
-          // collector's own K8S_NODE_NAME env (chart downward API). No `app`/pod
-          // labels — those need the API server, which the egress NP blocks by
-          // design; namespace+pod+container+node is enough to query Loki.
+          // Derive labels from __path__ + node name from K8S_NODE_NAME env. No app/pod labels — those need
+          // the API server, blocked by the egress NP; namespace+pod+container+node is enough to query Loki.
           discovery.relabel "pods" {
             targets = local.file_match.pods.targets
 

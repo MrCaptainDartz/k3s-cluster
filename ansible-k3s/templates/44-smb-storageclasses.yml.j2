@@ -1,20 +1,6 @@
 ---
-# ============================================================
-# SMB CSI StorageClasses (one per share, credentials per namespace)
-# ============================================================
-# Rendered only when smb_enabled is true (see site.yml pre_tasks). One
-# StorageClass is created per entry in smb_shares, bound to that share's source.
-#
-# Credentials are ISOLATED PER NAMESPACE: each StorageClass resolves its Secret
-# in the PVC's OWN namespace via the ${pvc.namespace} token. This token is a
-# standard CSI feature (resolved by the kubelet / csi-provisioner before the
-# driver is called), NOT a Jinja2 variable, so it stays literal in the manifest.
-#
-# Consequence: this baseline does NOT create the Secret — you must create a
-# Secret named smb_secret_name in EVERY namespace that consumes an SMB share,
-# when you set up that application (the namespace itself is created later by
-# you, not by this baseline). See the README for the Secret manifest.
-# ============================================================
+# SMB CSI StorageClasses (one per smb_shares entry); rendered when smb_enabled. Credentials isolated per namespace.
+# GOTCHA: ${pvc.namespace} is a CSI token (resolved by kubelet/csi-provisioner), NOT a Jinja2 var — stays literal. Baseline doesn't create the Secret; create smb_secret_name per consuming namespace.
 {% for share in smb_shares %}
 ---
 apiVersion: storage.k8s.io/v1
