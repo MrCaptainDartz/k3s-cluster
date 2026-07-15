@@ -3,9 +3,7 @@
   hosts: k3s_cluster
   gather_facts: true
   pre_tasks:
-    # Resolve the kube-vip interface: auto-detect the NIC whose ipv4.network
-    # matches node_cidr (the VIP's network) instead of the default route (can be
-    # a separate storage NIC). An explicit all.yml value overrides this block.
+    # Auto-detect kube-vip interface based on node_cidr unless explicitly set in all.yml.
     - name: Auto-resolve the kube-vip interface from the VIP subnet
       ansible.builtin.set_fact:
         k3s_vip_interface: "{{ item.device }}"
@@ -19,8 +17,7 @@
         }}
       when:
         - k3s_vip_interface | length == 0
-          # node_cidr is network-form (e.g. 10.20.4.0/24); strip the /prefix to
-          # compare to ipv4.network. Avoids ipaddr filter (needs netaddr lib).
+          # Compare network prefixes to avoid ipaddr filter (requires netaddr lib)
         - item.ipv4.network == (node_cidr | split('/') | first)
 
     - name: Fail if the kube-vip interface could not be resolved
@@ -31,9 +28,8 @@
           k3s_vip_interface explicitly in inventory/group_vars/all.yml.
       when: k3s_vip_interface | length == 0
 
-    # Compose the K3s auto-deploy manifest lists here: an inline Jinja if-tag is
-    # invalid in a YAML list in a vars file, so conditional appends happen here.
-    # Ceph CSI is always-on; NFS/SMB/cert-manager/observability are *_enabled-gated.
+    # Dynamically build K3s manifest lists (inline Jinja logic fails in YAML vars lists).
+    # Ceph is always appended; others are gated by *_enabled flags.
     - name: Append Ceph CSI manifests (always-on primary storage, group 50-56)
       ansible.builtin.set_fact:
         k3s_server_manifests_urls: >-
@@ -62,8 +58,7 @@
             + (smb_enabled | bool | ternary(smb_manifest_templates, []))
           }}
 
-    # cert-manager: append base manifests when enabled, plus each DNS webhook
-    # only if a credential of its provider is present (guards unused webhooks).
+    # Append cert-manager and specific DNS webhooks if enabled and configured.
     - name: Append optional cert-manager manifests when enabled
       ansible.builtin.set_fact:
         k3s_server_manifests_urls: >-
@@ -99,9 +94,7 @@
   roles:
     - role: xanmanning.k3s
 
-  # CoreDNS addon has no replicas field since v1.25.5, so kubectl scale persists
-  # and no K3s flag exists; re-assert coredns_replicas here on every deploy (first
-  # control plane only to avoid races; topologySpread gives one-per-node HA).
+  # Assert CoreDNS replica count (K3s addon no longer sets spec.replicas since v1.25.5).
   post_tasks:
     - name: Wait for CoreDNS Deployment to exist
       ansible.builtin.command:
@@ -152,8 +145,7 @@
         - (coredns_current_replicas.stdout | int) != (coredns_replicas | int)
 
     # ------------------------------------------------------------
-    # Post-deploy verification: K3s auto-deploy is fire-and-forget, so failures
-    # would otherwise report success; rollout status retries until rc==0.
+    # Post-deploy verification (ensure auto-deploy resources actually rolled out)
     # ------------------------------------------------------------
     - name: Verify Traefik DaemonSet is rolled out
       ansible.builtin.command:
@@ -271,8 +263,7 @@
         - smb_enabled | bool
 
     # ------------------------------------------------------------
-    # Observability verification: 65- ServiceMonitors/Rules need the 60- CRDs
-    # and apply on the 2nd boot (fire-and-forget, same as cert-manager issuers).
+    # Observability verification
     # ------------------------------------------------------------
     - name: Verify Prometheus is rolled out
       ansible.builtin.command:
