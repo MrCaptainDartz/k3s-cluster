@@ -3,6 +3,25 @@
   hosts: k3s_cluster
   gather_facts: true
   pre_tasks:
+    # Force IPv4 preference on the nodes BEFORE the k3s role runs its downloads.
+    # The nodes receive IPv6 default routes (RA) + a global IPv6 address, but IPv6 egress is
+    # blackholed on this network. curl/ruby use Happy Eyeballs (race v4/v6 -> v4 wins, fast), but
+    # Python's urllib (ansible get_url / uri) prefers IPv6 -> it hangs ~40s on the dead v6 path
+    # before falling back to v4. That stalled the role's "download auto-deploying manifests" task
+    # (get_url loop with NO timeout) for minutes on every run, and slowed the k3s binary download
+    # on every node. /etc/gai.conf precedence ::ffff:0:0/96 100 makes glibc getaddrinfo return
+    # IPv4 first, so every urllib-based download skips the dead v6 path. Verified: get_url 43s -> 2.5s.
+    - name: Prefer IPv4 in glibc resolver (node IPv6 egress is blackholed)
+      ansible.builtin.copy:
+        dest: /etc/gai.conf
+        content: |
+          # Managed by ansible-k3s site.yml. Python urllib (Ansible get_url/uri, k3s downloads)
+          # prefers IPv6 by default; this network's IPv6 egress is blackholed, so prefer IPv4.
+          precedence ::ffff:0:0/96 100
+        mode: "0644"
+        owner: root
+        group: root
+      become: true
     # Auto-detect kube-vip interface based on node_cidr unless explicitly set in all.yml.
     - name: Auto-resolve the kube-vip interface from the VIP subnet
       ansible.builtin.set_fact:
