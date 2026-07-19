@@ -130,6 +130,15 @@
             + (kured_enabled | bool | ternary(kured_manifest_templates, []))
           }}
 
+    # CoreDNS PDB
+    - name: Append CoreDNS PodDisruptionBudget
+      ansible.builtin.set_fact:
+        k3s_server_manifests_templates: >-
+          {{
+            k3s_server_manifests_templates
+            + ['68-coredns-pdb.yml.j2']
+          }}
+
     # Persistent journald: K3s control-plane components log to the host's journald unit (k3s.service).
     # By default journald is volatile (/run/log/journal, lost on reboot). Make it persistent
     # (/var/log/journal) so Alloy's loki.source.journal can tail it (the /var/log mount already covers
@@ -214,6 +223,14 @@
       when:
         - inventory_hostname == (groups['k3s_cluster'] | first)
         - (coredns_current_replicas.stdout | int) != (coredns_replicas | int)
+
+    - name: Enforce strict PodAntiAffinity for CoreDNS
+      ansible.builtin.command:
+        cmd: >-
+          /usr/local/bin/k3s kubectl patch deployment coredns -n kube-system -p '{"spec":{"template":{"spec":{"affinity":{"podAntiAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":[{"labelSelector":{"matchExpressions":[{"key":"k8s-app","operator":"In","values":["kube-dns"]}]},"topologyKey":"kubernetes.io/hostname"}],"preferredDuringSchedulingIgnoredDuringExecution":null}}}}}}'
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+      changed_when: false
 
     # ------------------------------------------------------------
     # Post-deploy verification (ensure auto-deploy resources actually rolled out)

@@ -418,6 +418,20 @@ observability_manifest_templates:
   - 64-observability-network-policies.yml.j2
   - 65-observability-rules.yml.j2
 
+# ============================================================
+# Kured (Kubernetes Reboot Daemon)
+# ============================================================
+# Enable automated node reboots for OS updates
+kured_enabled: false
+
+# Kured helm chart version
+kured_chart_version: "5.5.1"
+kured_chart_repo: "https://kubereboot.github.io/charts"
+
+# Optional Kured manifests
+kured_manifest_templates:
+  - 67-kured.yml.j2
+
 # ------------------------------------------------------------
 # Optional volume snapshot CronJobs
 # ------------------------------------------------------------
