@@ -16,6 +16,14 @@ spec:
     controller:
       type: daemonset
       hostNetwork: false
+      volumes:
+        extra:
+          # Host machine-id so loki.source.journal resolves the host's journal dir
+          # /var/log/journal/<machine-id>/ (the container's own machine-id wouldn't match).
+          - name: machine-id
+            hostPath:
+              path: /etc/machine-id
+              type: File
 
     alloy:
       # Mount /var/log so loki.source.file tails /var/log/pods/<ns>_<pod>_<uid>/<container>/*.log. K3s writes
@@ -23,6 +31,17 @@ spec:
       # `extraVolumeMounts` are SILENTLY IGNORED — use `alloy.mounts.*` (container) + `controller.volumes.*` (pod).
       mounts:
         varlog: true
+        # /var/log (via varlog above) already covers /var/log/journal once persistent journald is on.
+        # Overlay the host machine-id (see controller.volumes.extra).
+        extra:
+          - name: machine-id
+            mountPath: /etc/machine-id
+            readOnly: true
+      # Run as root so the journal files (root:systemd-journal, 0640) are readable — the container's
+      # alloy user isn't in systemd-journal. The namespace is PSS-exempt (unlabelled), so root is allowed.
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
       configMap:
         create: true
         content: |-
@@ -78,6 +97,34 @@ spec:
           loki.source.file "pods" {
             targets    = discovery.relabel.pods.output
             forward_to = [loki.write.loki.receiver]
+          }
+
+          // K3s control-plane components (apiserver/scheduler/controller-manager/etcd) run in the single
+          // k3s process and log to the host's journald unit (k3s.service on control nodes, k3s-agent.service
+          // on workers) — interleaved, no per-component tag. loki.source.journal scans /var/log/journal
+          // (mounted via varlog + /etc/machine-id overlay so the host machine-id is resolved). matches="" =
+          // all units; relabel exposes the systemd unit as a label so Loki can filter (e.g. {unit="k3s.service"}).
+          // No network: reads host fs only -> the 64- egress NP (Loki+DNS) needs no change.
+          discovery.relabel "journal" {
+            targets = []
+
+            rule {
+              source_labels = ["__journal__systemd_unit"]
+              target_label  = "unit"
+            }
+            rule {
+              target_label = "job"
+              replacement  = "journald"
+            }
+            rule {
+              target_label = "node"
+              replacement  = sys.env("K8S_NODE_NAME")
+            }
+          }
+
+          loki.source.journal "k3s" {
+            forward_to    = [loki.write.loki.receiver]
+            relabel_rules = discovery.relabel.journal.rules
           }
 
           loki.write "loki" {

@@ -47,7 +47,7 @@ ansible-k3s/
     ├── 59-ceph-volumesnapshot-classes.yml.j2 # RBD + CephFS VolumeSnapshotClass (always-on, deletionPolicy Delete; needs the 57-58 snapshotter CRDs/controller)
     ├── 60-kube-prometheus-stack.yml.j2   # HelmChart CR: Prometheus + Operator + Grafana + Alertmanager + kube-state-metrics (only if observability_enabled, node-exporter disabled)
     ├── 61-loki.yml.j2                    # HelmChart CR: Loki monolithic + filesystem PVC (only if observability_enabled)
-    ├── 62-alloy.yml.j2                   # HelmChart CR: Alloy log shipper DaemonSet in observability-host (only if observability_enabled)
+    ├── 62-alloy.yml.j2                   # HelmChart CR: Alloy log shipper DaemonSet in observability-host — pod logs (/var/log/pods) + host journald (only if observability_enabled)
     ├── 63-node-exporter.yml.j2           # HelmChart CR: prometheus-node-exporter DaemonSet in observability-host (only if observability_enabled)
     ├── 64-observability-network-policies.yml.j2 # monitoring + observability-host deny-all + targeted allows (only if observability_enabled)
     ├── 65-observability-rules.yml.j2     # ServiceMonitors/PodMonitors + platform PrometheusRule (only if observability_enabled)
@@ -978,7 +978,7 @@ spec:
 
 ### Observability — optional
 
-Off by default (`observability_enabled: false`): nothing is installed. Flip the flag to deploy a monitoring baseline that lets you **see and alert on the platform itself** — nodes, kubelet/cAdvisor, kube-api, CoreDNS, Traefik, kube-vip, cert-manager, MetalLB, ceph-csi-operator — plus **pod logs**, with room to grow when your apps arrive.
+Off by default (`observability_enabled: false`): nothing is installed. Flip the flag to deploy a monitoring baseline that lets you **see and alert on the platform itself** — nodes, kubelet/cAdvisor, kube-api, CoreDNS, Traefik, kube-vip, cert-manager, MetalLB, ceph-csi-operator — plus the **control-plane components K3s runs in-process** (etcd, kube-scheduler, kube-controller-manager, kube-proxy) and **pod + journald logs**, with room to grow when your apps arrive.
 
 #### Stack
 
@@ -988,10 +988,10 @@ Everything deploys via the project's **HelmChart CR** pattern, group `60-65`, op
 | --- | --- | --- |
 | [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) | `kube-prometheus-stack` (`60-`) | Prometheus + Prometheus Operator + Grafana + Alertmanager + kube-state-metrics + the Operator CRDs (ServiceMonitor/PodMonitor/PrometheusRule) + the upstream default dashboards and alert rules. **node-exporter is disabled here** and installed separately. |
 | [Loki](https://github.com/grafana-community/helm-charts/tree/main/charts/loki) | `loki` (`61-`, community chart) | Logs backend, monolithic / single-binary, filesystem storage on a `ceph-rbd` PVC. |
-| [Alloy](https://github.com/grafana/alloy/tree/main/operations/helm/charts/alloy) | `alloy` (`62-`) | Log shipper DaemonSet — tails pod logs from the node filesystem and pushes to Loki. (Metrics/traces collectors not declared; add them later.) |
+| [Alloy](https://github.com/grafana/alloy/tree/main/operations/helm/charts/alloy) | `alloy` (`62-`) | Log shipper DaemonSet — tails **pod logs** from the node filesystem (`/var/log/pods`) **and the host journald** (control-plane `k3s.service` / `k3s-agent.service` units), pushes both to Loki. (Metrics/traces collectors not declared; add them later.) |
 | [prometheus-node-exporter](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus-node-exporter) | `prometheus-node-exporter` (`63-`) | Host metrics (CPU/mem/disk/net) DaemonSet. Installed separately so it can live in the exempt namespace. |
 
-kube-prometheus-stack **bundles its own ServiceMonitors** for kubelet / kube-apiserver / CoreDNS / kube-state-metrics, so those scrape automatically. `65-` adds the cross-namespace ServiceMonitors/PodMonitors for the components KPS does **not** cover (Traefik, kube-vip, cert-manager, MetalLB, ceph-csi-operator, our separate node-exporter) + one `PrometheusRule` with platform alerts (cert-manager certificates, PVC pending, crash-loop, disk full).
+kube-prometheus-stack **bundles its own ServiceMonitors** for kubelet / kube-apiserver / CoreDNS / kube-state-metrics, so those scrape automatically. The KPS component scrapers `kubeEtcd` / `kubeScheduler` / `kubeControllerManager` / `kubeProxy` are **enabled in `60-` with explicit `endpoints`** (the 3 control-plane IPs) because K3s runs those components **in-process** and binds their metrics servers to `127.0.0.1` — they are not separate pods KPS could discover. The matching `k3s_server` flags in `all.yml` (`etcd-expose-metrics`, `kube-*-arg: bind-address=0.0.0.0`, `kube-proxy-arg: metrics-bind-address=0.0.0.0`) expose them on the network; the role restarts k3s to apply the change. `65-` adds the cross-namespace ServiceMonitors/PodMonitors for the components KPS does **not** cover (Traefik, kube-vip, cert-manager, MetalLB, ceph-csi-operator, our separate node-exporter) + one `PrometheusRule` with platform alerts (cert-manager certificates, PVC pending, crash-loop, disk full).
 
 > **Backend is Prometheus** (not VictoriaMetrics). Storage: Prometheus ~20Gi + Loki ~10Gi + Grafana 5Gi, all on `ceph-rbd`. Retention: Prometheus 15d, Loki 7d (compactor). Tune `observability_prometheus_*` / `observability_loki_*` in `all.yml`.
 
@@ -1025,6 +1025,17 @@ observability_grafana_admin_password: "change-me-after-first-login"
 #### Verify the targets
 
 The ServiceMonitors in `65-` use best-effort port names/labels for each platform component. After enabling, open **Prometheus → Status → Targets**: every target should be UP. A DOWN target means the `port`/`targetPort` or selector does not match the actual chart/manifest — adjust it in `65-` and the matching `allow-ingress-from-prometheus` port in `11-`/`25-`/`56-` (they must match the same pod port). Known likely adjustments: Traefik (requires the metrics entrypoint enabled — set it in `12-traefik-config.yml.j2`) and ceph-csi-operator (verify the operator's metrics bind port).
+
+#### Control-plane logs (journald)
+
+The control-plane components (apiserver/scheduler/controller-manager/etcd) run in the single `k3s` process and log to the host's journald unit `k3s.service` (`k3s-agent.service` on workers) — interleaved, with **no per-component tag**. They never appear in `/var/log/pods`, so the file-based Alloy pipeline would not see them. `62-` adds a `loki.source.journal` block that tails the journal and relabels the systemd unit into a Loki `unit` label, alongside the existing pod-log pipeline.
+
+Two host-side requirements, both handled by `site.yml` pre-tasks gated on `observability_enabled`:
+
+- **Persistent journald.** By default journald is volatile (`/run/log/journal`, lost on reboot, and **not** mounted into the Alloy pod). A drop-in `/etc/systemd/journald.conf.d/10-persistent.conf` (`Storage=persistent` + `SystemMaxUse=500M`) switches it to `/var/log/journal`, which the existing `/var/log` mount already covers. `journalctl --flush` migrates the runtime journal so it is populated before Alloy starts. (`journald.conf.d` does not exist by default, so the dir is created first — `copy` does not create parents.)
+- **Host `machine-id` overlay.** `loki.source.journal` resolves `/var/log/journal/<machine-id>/` from the **container's** machine-id, which differs from the host's → it would find nothing. `62-` mounts the host `/etc/machine-id` (readOnly) over the container's, and runs Alloy as **root** (`runAsUser: 0`) because journal files are `root:systemd-journal` 0640. Root is allowed because `observability-host` is PSS-exempt.
+
+No NetworkPolicy change is needed — `loki.source.journal` reads the host filesystem only. In Loki/Grafana, filter the control-plane logs with `{job="journald", unit="k3s.service"}`.
 
 ### NFS & SMB CSI
 

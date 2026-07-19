@@ -101,6 +101,39 @@
             k3s_server_manifests_templates
             + (((volume_snapshots | default([])) | length > 0) | ternary(volume_snapshots_manifest_templates, []))
           }}
+
+    # Persistent journald: K3s control-plane components log to the host's journald unit (k3s.service).
+    # By default journald is volatile (/run/log/journal, lost on reboot). Make it persistent
+    # (/var/log/journal) so Alloy's loki.source.journal can tail it (the /var/log mount already covers
+    # /var/log/journal; /run/log/journal is NOT mounted). Run before the role so /var/log/journal is
+    # populated before the Alloy DaemonSet starts. Gated on observability_enabled (no Alloy -> no need).
+    - name: Create journald drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        mode: "0755"
+      become: true
+      when: observability_enabled | bool
+
+    - name: Ensure persistent journald config (Alloy tails /var/log/journal)
+      ansible.builtin.copy:
+        dest: /etc/systemd/journald.conf.d/10-persistent.conf
+        content: |
+          [Journal]
+          Storage=persistent
+          SystemMaxUse=500M
+        mode: "0644"
+      become: true
+      register: journald_conf
+      when: observability_enabled | bool
+
+    - name: Restart journald + flush runtime -> persistent
+      ansible.builtin.shell: systemctl restart systemd-journald && journalctl --flush
+      become: true
+      changed_when: false
+      when:
+        - observability_enabled | bool
+        - journald_conf.changed | default(false)
   roles:
     - role: xanmanning.k3s
 

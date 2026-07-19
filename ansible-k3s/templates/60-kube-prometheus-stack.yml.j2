@@ -12,6 +12,8 @@ spec:
   version: "{{ observability_kps_chart_version }}"
   targetNamespace: {{ observability_namespace }}
 {% set telegram_configured = (observability_alertmanager_telegram_chat_id | int != 0) and (observability_alertmanager_telegram_bot_token | length > 0) and (observability_alertmanager_telegram_bot_token != "REDACTED") %}
+{# Control-plane IPs from inventory (hosts with k3s_control_node=true) for KPS component endpoints. #}
+{%- set cp_ips = (groups['k3s_cluster'] | map('extract', hostvars) | selectattr('k3s_control_node', 'defined') | selectattr('k3s_control_node', 'truthy') | list) | map(attribute='ansible_host') | list %}
   valuesContent: |-
     # node-exporter disabled (separate 63-). Gotcha: the subchart activation key is
     # `nodeExporter.enabled`, NOT `prometheus-node-exporter.enabled` — the latter is a
@@ -19,17 +21,36 @@ spec:
     nodeExporter:
       enabled: false
 
-    # K3s runs these in-process (no static pods) -> KPS scrapers have empty targets ->
-    # false-positive *Down alerts. Unlike node-exporter above, these are internal KPS
-    # components (not subcharts), so their `*.enabled` keys work directly.
+    # K3s runs these in-process and binds their metrics servers to 127.0.0.1 by default. We expose
+    # them via bind-address=0.0.0.0 / metrics-bind-address=0.0.0.0 (k3s_server flags in all.yml) so
+    # Prometheus can scrape the 3 control planes by IP. KPS defaults already match: etcd HTTP:2381,
+    # KCM HTTPS:10257, scheduler HTTPS:10259 (self-signed -> insecureSkipVerify, the KPS default; no
+    # secret mounts), kubeProxy HTTP:10249. This cluster has only the 3 control-plane nodes (no
+    # workers), so kubeProxy scrapes the same 3 IPs.
     kubeEtcd:
-      enabled: false
+      enabled: true
+      endpoints:
+{% for ip in cp_ips %}
+        - {{ ip }}
+{% endfor %}
     kubeControllerManager:
-      enabled: false
+      enabled: true
+      endpoints:
+{% for ip in cp_ips %}
+        - {{ ip }}
+{% endfor %}
     kubeScheduler:
-      enabled: false
+      enabled: true
+      endpoints:
+{% for ip in cp_ips %}
+        - {{ ip }}
+{% endfor %}
     kubeProxy:
-      enabled: false
+      enabled: true
+      endpoints:
+{% for ip in cp_ips %}
+        - {{ ip }}
+{% endfor %}
 
     prometheus:
       prometheusSpec:
