@@ -1,0 +1,27 @@
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: kured
+  namespace: kube-system
+spec:
+  repo: "{{ kured_chart_repo }}"
+  chart: kured
+  version: "{{ kured_chart_version }}"
+  targetNamespace: kube-system
+  valuesContent: |-
+    configuration:
+      # Options
+      period: 1m
+    
+    rbac:
+      create: true
+      
+    # Tolerations so Kured can run on all nodes (even master/control-plane nodes)
+    tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule

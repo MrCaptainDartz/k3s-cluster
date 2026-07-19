@@ -121,6 +121,15 @@
             + (((volume_snapshots | default([])) | length > 0) | ternary(volume_snapshots_manifest_templates, []))
           }}
 
+    # Kured (Automated Node Reboots)
+    - name: Append optional Kured manifests when enabled
+      ansible.builtin.set_fact:
+        k3s_server_manifests_templates: >-
+          {{
+            k3s_server_manifests_templates
+            + (kured_enabled | bool | ternary(kured_manifest_templates, []))
+          }}
+
     # Persistent journald: K3s control-plane components log to the host's journald unit (k3s.service).
     # By default journald is volatile (/run/log/journal, lost on reboot). Make it persistent
     # (/var/log/journal) so Alloy's loki.source.journal can tail it (the /var/log mount already covers
@@ -504,6 +513,26 @@
       when:
         - inventory_hostname == (groups['k3s_cluster'] | first)
         - (volume_snapshots | default([]) | length > 0)
+
+    - name: Verify Kured DaemonSet is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - daemonset/kured
+          - -n
+          - kube-system
+          - --timeout=60s
+      changed_when: false
+      register: verify_kured
+      retries: 20
+      delay: 5
+      until: verify_kured.rc == 0
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - kured_enabled | bool
 
     # ------------------------------------------------------------
     # Kubeconfig for ansible_user
