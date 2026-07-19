@@ -40,19 +40,21 @@ ansible-k3s/
     ├── 26-certmanager-webhook-secret-reader.yml.j2 # Role+RoleBinding letting OVH/Infomaniak webhooks read their cred Secrets (only if certmanager_enabled)
     ├── 34-nfs-storageclasses.yml.j2       # NFS CSI StorageClasses, one per nfs_shares entry (only if nfs_enabled)
     ├── 44-smb-storageclasses.yml.j2       # SMB CSI StorageClasses, one per smb_shares entry (only if smb_enabled)
-    ├── 50-ceph-secrets.yml.j2            # Ceph client key Secret (always-on, group 50-56)
-    ├── 51-ceph-storageclasses.yml.j2     # RBD (Delete default + Retain) + CephFS StorageClasses
+    ├── 50-ceph-secrets.yml.j2            # Ceph client key Secret (always-on, group 50-59)
+    ├── 51-ceph-storageclasses.yml.j2     # RBD (Retain default + Delete opt-in) + CephFS (Retain default + Delete opt-in) StorageClasses
     ├── 55-ceph-csi-operator-config.yml.j2 # Driver / CephConnection / ClientProfile CRs
     ├── 56-ceph-network-policies.yml.j2   # ceph-csi-operator-system deny-all + targeted egress
+    ├── 59-ceph-volumesnapshot-classes.yml.j2 # RBD + CephFS VolumeSnapshotClass (always-on, deletionPolicy Delete; needs the 57-58 snapshotter CRDs/controller)
     ├── 60-kube-prometheus-stack.yml.j2   # HelmChart CR: Prometheus + Operator + Grafana + Alertmanager + kube-state-metrics (only if observability_enabled, node-exporter disabled)
     ├── 61-loki.yml.j2                    # HelmChart CR: Loki monolithic + filesystem PVC (only if observability_enabled)
     ├── 62-alloy.yml.j2                   # HelmChart CR: Alloy log shipper DaemonSet in observability-host (only if observability_enabled)
     ├── 63-node-exporter.yml.j2           # HelmChart CR: prometheus-node-exporter DaemonSet in observability-host (only if observability_enabled)
     ├── 64-observability-network-policies.yml.j2 # monitoring + observability-host deny-all + targeted allows (only if observability_enabled)
-    └── 65-observability-rules.yml.j2     # ServiceMonitors/PodMonitors + platform PrometheusRule (only if observability_enabled)
+    ├── 65-observability-rules.yml.j2     # ServiceMonitors/PodMonitors + platform PrometheusRule (only if observability_enabled)
+    └── 66-volume-snapshots.yml.j2        # Per-application PVC snapshot CronJobs (opt-in via volume_snapshots in all.yml)
 ```
 
-> The `.j2` files above are rendered by the role; the **URL** manifests (MetalLB native, ceph-csi-operator CRD/RBAC/operator, the NFS/SMB driver manifests, `cert-manager.yaml`, the Infomaniak webhook) are downloaded directly into the same `/var/lib/rancher/k3s/server/manifests/` dir. They all share one numbering scheme with **no overlap between ranges**, applied in filename order:
+> The `.j2` files above are rendered by the role; the **URL** manifests (MetalLB native, ceph-csi-operator CRD/RBAC/operator, the CSI external-snapshotter CRDs + snapshot-controller, the NFS/SMB driver manifests, `cert-manager.yaml`, the Infomaniak webhook) are downloaded directly into the same `/var/lib/rancher/k3s/server/manifests/` dir. They all share one numbering scheme with **no overlap between ranges**, applied in filename order:
 >
 > | Range   | Component | Source |
 > | ------- | --------- | ------ |
@@ -60,10 +62,11 @@ ansible-k3s/
 > | `20-26` | cert-manager (cert-manager + Infomaniak/OVH webhooks + DNS secrets/issuers/NPs) | URLs 20-21 + templates 22-26 |
 > | `30-34` | NFS CSI (RBAC/driverinfo/controller/node + StorageClasses) | URLs 30-33 + template 34 |
 > | `40-44` | SMB CSI (RBAC/driver/controller/node + StorageClasses) | URLs 40-43 + template 44 |
-> | `50-56` | Ceph CSI (secrets, StorageClasses, operator CRD/RBAC/deploy, config, NP) | URLs 52-54 + templates 50,51,55,56 |
+> | `50-59` | Ceph CSI + CSI external-snapshotter (Ceph secrets/StorageClasses/operator/config/NP, VolumeSnapshot CRDs, snapshot-controller, Ceph VolumeSnapshotClasses) | URLs 52-54,57-58 + templates 50,51,55,56,59 |
 > | `60-65` | Observability (kube-prometheus-stack + Loki + Alloy + node-exporter, all HelmChart CRs) | templates 60-65 |
+> | `66` | Volume snapshot CronJobs (per-application PVC snapshots, opt-in) | template 66 |
 >
-> Within each range the driver/CRDs precede the StorageClasses/policies that depend on them. cert-manager sits right after the baseline; the three CSI drivers (NFS/SMB/Ceph) are grouped together after it; observability is last. Ceph is the always-on primary storage (no `*_enabled` flag); NFS/SMB/cert-manager/observability are opt-in.
+> Within each range the driver/CRDs precede the StorageClasses/policies that depend on them. cert-manager sits right after the baseline; the three CSI drivers (NFS/SMB/Ceph) are grouped together after it; observability is last; the volume-snapshot CronJobs (66) are opt-in per application. Ceph is the always-on primary storage (no `*_enabled` flag); NFS/SMB/cert-manager/observability are opt-in; volume snapshots are opt-in by populating the `volume_snapshots` list.
 
 ## Quick start
 
@@ -192,9 +195,10 @@ Here are some important variables based on the provided examples:
 | `certmanager_dns_credentials` | `[…]`                            | Per-provider DNS creds (Cloudflare/OVH/Infomaniak), each routed by `match_domains`; tokens are **vault-protected**. See `all.yml.example`. |
 | `certmanager_webhook_group_ovh` | `acme.myhomelab.example`        | OVH webhook `groupName` (must match the issuer); unique to you. |
 | `cephfs_subvolumegroup` | `csi`                                | The CephFS subvolume group used by the CephFS driver (must exist in Ceph). |
-| `ceph_sc_rbd_name`    | `ceph-rbd`                             | RBD StorageClass, the cluster **default** (`reclaimPolicy: Delete` — fine for reproducible/throwaway state such as the observability PVCs; dangerous for data you can't regenerate). |
-| `ceph_sc_rbd_retain_name` | `ceph-rbd-retain`                 | RBD StorageClass, **opt-in** (`reclaimPolicy: Retain`) for important app data (DBs, anything non-reproducible). Pick the SC by **data value**, not storage type — the default is destructive. |
-| `ceph_sc_cephfs_name` | `ceph-cephfs`                          | CephFS StorageClass (`reclaimPolicy: Retain` — the subvolume survives an accidental PVC deletion; clean up orphaned subvolumes manually). |
+| `ceph_sc_rbd_name`    | `proxmox-rbd`                          | RBD StorageClass, cluster **default** (`reclaimPolicy: Retain` — storage NOT freed on PVC delete; reclaim manually. Explicit, no silent leak. Snapshots cover accidental deletion). |
+| `ceph_sc_rbd_delete_name` | `proxmox-rbd-delete`              | RBD StorageClass, **opt-in** (`reclaimPolicy: Delete` — auto-free Ceph image) for genuinely ephemeral, unsnapshotted data (scratch, caches). With snapshots the image is only trashed until removed. |
+| `ceph_sc_cephfs_name` | `proxmox-cephfs`                       | CephFS StorageClass, cluster **default** (`reclaimPolicy: Retain` — subvolume survives accidental PVC deletion; clean up orphaned subvolumes manually). |
+| `ceph_sc_cephfs_delete_name` | `proxmox-cephfs-delete`         | CephFS StorageClass, **opt-in** (`reclaimPolicy: Delete` — auto-free subvolume) for ephemeral shared data. |
 | `nfs_enabled`         | `false`                                | Deploy the NFS CSI driver + one StorageClass per entry in `nfs_shares`. `false` = nothing is installed. |
 | `nfs_csi_version`     | `v4.13.4`                              | Release tag of `kubernetes-csi/csi-driver-nfs` (raw manifests pulled from this tag). |
 | `nfs_shares`          | `[{name, server, share}]`              | One StorageClass per share (cluster-scoped, named after the share); `name` is the `storageClassName` to reference in a PVC. |
@@ -210,6 +214,10 @@ Here are some important variables based on the provided examples:
 | `observability_grafana_tls_issuer` | `letsencrypt-prod`         | cert-manager `ClusterIssuer` used for the Grafana Ingress TLS (must match a `certmanager_acme_servers` entry). |
 | `observability_alertmanager_telegram_bot_token` / `_chat_id` | `REDACTED` / `0` | Alertmanager Telegram receiver (native `telegram_configs`). **Secrets** — real values in the gitignored `all.yml`; `chat_id` is an integer (negative for groups). |
 | `observability_grafana_admin_password` | `REDACTED`                  | Grafana initial admin password. **Secret** — real value in the gitignored `all.yml`; change it after first login. |
+| `ceph_vsc_rbd_name` / `ceph_vsc_cephfs_name` | `ceph-rbd` / `ceph-cephfs` | RBD + CephFS `VolumeSnapshotClass` names (always-on, declared by `59-`). Cluster-scoped and independent of the StorageClass names. |
+| `csi_snapshotter_version` | `v8.6.0` | [external-snapshotter](https://github.com/kubernetes-csi/external-snapshotter) release whose VolumeSnapshot CRDs (57-) + `snapshot-controller` (58-) we install. K3s does not bundle these (only its own etcd-snapshot CRD); they are always-on so the VolumeSnapshotClasses and the opt-in CronJobs (66-) can function. |
+| `volume_snapshot_kubectl_image` / `_version` | `alpine/k8s` / `1.36.2` | Image used by the snapshotter CronJobs. Must ship a shell + coreutils (the CronJob script uses `/bin/sh` with heredoc/grep/sed/sort/xargs/date) — `registry.k8s.io/kubectl` is distroless (no shell) and `bitnami/kubectl` dropped its version tags. `alpine/k8s` bundles kubectl + busybox tools, pinned by k8s version. |
+| `volume_snapshots` | `[{name, pvc, namespace, snapshot_class, schedule, retention}]` | One `CronJob` per entry (in the app's own namespace) creating timestamped `VolumeSnapshot`s of the PVC and pruning beyond `retention`. Empty `[]` = nothing deployed. See [Backups (stateful apps via Ceph CSI snapshots)](#backups-stateful-apps-via-ceph-csi-snapshots). |
 
 #### Tested component versions
 
@@ -231,6 +239,8 @@ The versions below are the ones currently pinned in `inventory/group_vars/all.ym
 | Loki (optional) | `observability_loki_chart_version` | `18.4.4` (community chart) |
 | Alloy (optional) | `observability_alloy_chart_version` | `1.10.1` |
 | prometheus-node-exporter (optional) | `observability_node_exporter_chart_version` | `4.56.0` |
+| CSI external-snapshotter (snapshotter) | `csi_snapshotter_version` | `v8.6.0` |
+| kubectl image (snapshotter, optional) | `volume_snapshot_kubectl_version` | `1.36.2` (`alpine/k8s`) |
 
 > K3s is **pinned** to a specific release (`v1.36.2+k3s1`) rather than the moving `stable` channel, so a K3s bump (which silently changes the bundled Traefik chart version) is a deliberate, tested change.
 
@@ -808,9 +818,11 @@ kubectl get deploy -n kube-system coredns        # READY 3/3
 kubectl get pod -n kube-system -l k8s-app=kube-dns -o wide   # one per node
 ```
 
-## Backups (etcd snapshots)
+## Backups
 
-K3s (embedded etcd datastore) takes automatic snapshots on **each control-plane node** on the schedule defined by `k3s_etcd_snapshot_cron` (default: every 6 hours) and keeps `k3s_etcd_snapshot_retention` of them (default: 28, ≈ 7 days at 6 h intervals). Snapshots are written to `/var/lib/rancher/k3s/server/db/snapshots/` on every server. These settings are injected through the `k3s_server` config (`etcd-snapshot-schedule-cron` / `etcd-snapshot-retention`).
+### Backups (etcd snapshots)
+
+K3s (embedded etcd datastore) takes automatic snapshots on **each control-plane node** on the schedule defined by `k3s_etcd_snapshot_cron` (default: every 6 hours) and keeps `k3s_etcd_snapshot_retention` of them (default: 28, ≈ 7 days at 6 h intervals). Snapshots are written to `/var/lib/rancher/k3s/server/db/snapshots/` on every server. These settings are injected through the `k3s_server` config (`etcd-snapshot-schedule-cron` / `etcd-snapshot-retention`). These snapshots cover the **cluster state** (objects in etcd: Deployments, Secrets, ConfigMaps…) — not the data on your PVCs.
 
 ```bash
 # List snapshots on a control-plane node
@@ -826,6 +838,94 @@ sudo k3s etcd-snapshot snapshot ...
 ```
 
 > Snapshots stay on the node by default. For off-node / off-site backup, point K3s at an S3 bucket (`etcd-s3-endpoint`, `etcd-s3-bucket`, …) or sync the snapshot directory elsewhere — out of scope for this homelab baseline.
+
+### Backups (stateful apps via Ceph CSI snapshots)
+
+etcd snapshots only cover cluster objects, **not the data on your PVCs**. For stateful apps whose data you can't regenerate and that have no native dump (e.g. an object store, file uploads, an app without a `pg_dump`-style tool), the baseline can schedule **CSI snapshots** of individual PVCs. This is **opt-in per application**: you declare which PVCs to snapshot in `all.yml`, and the baseline deploys one `CronJob` per entry that creates a timestamped `VolumeSnapshot` and prunes the oldest beyond `retention`.
+
+> CSI snapshots are **crash-consistent, not app-consistent** — there is no quiesce, so a snapshot of a live database can capture a half-written state. For databases, **prefer an application-level dump** (e.g. a `CronJob` running `pg_dump`/`mysqldump` onto the NAS via the NFS CSI) over a volume snapshot. Snapshots also **live inside Ceph**, so they are not an off-site backup: a ransomware with cluster access, or a Ceph-level incident, can take them with it. They cover the common case — accidental deletion or soft corruption of a PVC — not disasters.
+
+The `VolumeSnapshot` CRDs and a `snapshot-controller` are installed by the baseline (URLs `57`-`58`, from [external-snapshotter](https://github.com/kubernetes-csi/external-snapshotter)) — **K3s does not bundle them** (it only ships its own etcd-snapshot CRD). The `VolumeSnapshotClass` for RBD and CephFS (`59-ceph-volumesnapshot-classes.yml.j2`) is always deployed alongside the Ceph StorageClasses. The CronJobs (`66-volume-snapshots.yml.j2`) are deployed only when `volume_snapshots` is non-empty.
+
+### Step 1 — Declare the PVC snapshot in `all.yml`
+
+Add an entry to `volume_snapshots` describing the PVC, the `VolumeSnapshotClass` to use, the schedule and the retention, then rerun the playbook:
+
+```yaml
+# all.yml
+volume_snapshots:
+  - name: minio-data          # snapshot name prefix + CronJob name suffix
+    pvc: minio                # PVC to snapshot
+    namespace: storage        # namespace of the PVC (and the CronJob)
+    snapshot_class: ceph-rbd  # VolumeSnapshotClass from 59- (ceph-rbd or ceph-cephfs)
+    schedule: "0 */6 * * *"   # cron schedule (here: every 6h)
+    retention: 8               # number of snapshots to keep
+```
+
+A `post_tasks` verify step asserts each CronJob exists once the playbook finishes.
+
+### Step 2 — What gets deployed
+
+For each entry, `66-` creates five namespaced objects in the app's own namespace:
+
+- a **ServiceAccount** `<name>-snapshotter`;
+- a **Role** + **RoleBinding** limited to `get/list/create/delete` on `volumesnapshots` and `get/list` on `persistentvolumeclaims`;
+- a **CronJob** (image `alpine/k8s`, pinned) that builds an in-cluster kubeconfig from its mounted ServiceAccount token (the `kubectl` CLI does not auto-use the SA token the way client-go `InClusterConfig` does), creates the snapshot and prunes old ones (`--wait=false`, so pruning does not block on the CSI finalizer reaping the Ceph snapshot image);
+- a **NetworkPolicy** allowing the snapshotter egress only to the API server (`6443`) and kube-dns — it never talks to Ceph directly (the cluster's `snapshot-controller` performs the CSI call), so it respects the app namespace's zero-trust posture without widening it.
+
+### Step 3 — Take an ad-hoc snapshot
+
+You can also snapshot on demand, outside the schedule:
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: minio-manual
+  namespace: storage
+spec:
+  volumeSnapshotClassName: ceph-rbd
+  source:
+    persistentVolumeClaimName: minio
+EOF
+```
+
+### Step 4 — Restore from a snapshot
+
+Create a new PVC backed by the snapshot as its `dataSource`:
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-restored
+  namespace: storage
+spec:
+  storageClassName: ceph-rbd       # must match the snapshot's class
+  dataSource:
+    name: minio-manual             # the VolumeSnapshot name
+    kind: VolumeSnapshot
+    apiGroup: snapshot.storage.k8s.io
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi               # must be >= the snapshot size
+```
+
+### Step 5 — Verify
+
+```bash
+# Snapshot classes are deployed by 59-
+kubectl get volumesnapshotclass
+# Snapshots, including the CronJob-managed ones (<name>-<timestamp>)
+kubectl get volumesnapshot -n storage
+# The snapshot is usable when READYTOUSE is true and its content exists
+kubectl get volumesnapshotcontent
+```
+
+> **Retention** is managed by each CronJob itself (CSI has no native retention policy): before each run it keeps the `retention` newest snapshots and deletes the rest. The `VolumeSnapshotClass` uses `deletionPolicy: Delete` so pruning actually frees the Ceph snapshot image — keep it that way, or rotated snapshots pile up and consume storage.
 
 ## Optional components
 

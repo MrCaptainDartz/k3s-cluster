@@ -29,13 +29,14 @@
       when: k3s_vip_interface | length == 0
 
     # Dynamically build K3s manifest lists (inline Jinja logic fails in YAML vars lists).
-    # Ceph is always appended; others are gated by *_enabled flags.
-    - name: Append Ceph CSI manifests (always-on primary storage, group 50-56)
+    # Ceph + CSI external-snapshotter are always appended; others are gated by *_enabled flags.
+    - name: Append Ceph CSI + external-snapshotter manifests (always-on, groups 50-59)
       ansible.builtin.set_fact:
         k3s_server_manifests_urls: >-
           {{
             k3s_server_manifests_urls
             + ceph_manifest_urls
+            + csi_snapshotter_manifest_urls
           }}
         k3s_server_manifests_templates: >-
           {{
@@ -90,6 +91,15 @@
           {{
             k3s_server_manifests_templates
             + (observability_enabled | bool | ternary(observability_manifest_templates, []))
+          }}
+
+    # Per-application PVC snapshot CronJobs (66-): opt-in, only when volume_snapshots is non-empty.
+    - name: Append optional volume snapshot CronJobs when volume_snapshots is non-empty
+      ansible.builtin.set_fact:
+        k3s_server_manifests_templates: >-
+          {{
+            k3s_server_manifests_templates
+            + (((volume_snapshots | default([])) | length > 0) | ternary(volume_snapshots_manifest_templates, []))
           }}
   roles:
     - role: xanmanning.k3s
@@ -199,6 +209,24 @@
       retries: 20
       delay: 5
       until: verify_ceph_operator.rc == 0
+      when: inventory_hostname == (groups['k3s_cluster'] | first)
+
+    - name: Verify CSI snapshot-controller is rolled out
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/snapshot-controller
+          - -n
+          - kube-system
+          - --timeout=60s
+      changed_when: false
+      register: verify_snapshot_controller
+      retries: 20
+      delay: 5
+      until: verify_snapshot_controller.rc == 0
       when: inventory_hostname == (groups['k3s_cluster'] | first)
 
     - name: Verify cert-manager deployments are available
@@ -404,6 +432,26 @@
       when:
         - inventory_hostname == (groups['k3s_cluster'] | first)
         - observability_enabled | bool
+
+    - name: Verify volume snapshot CronJobs exist
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - get
+          - cronjob
+          - "{{ item.name }}-snapshotter"
+          - -n
+          - "{{ item.namespace }}"
+      changed_when: false
+      register: verify_volume_snapshots
+      loop: "{{ volume_snapshots | default([]) }}"
+      retries: 20
+      delay: 5
+      until: verify_volume_snapshots.rc == 0
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - (volume_snapshots | default([]) | length > 0)
 
     # ------------------------------------------------------------
     # Kubeconfig for ansible_user

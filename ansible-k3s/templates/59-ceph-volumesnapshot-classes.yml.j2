@@ -1,0 +1,28 @@
+---
+# RBD VolumeSnapshotClass — crash-consistent snapshots of proxmox-rbd PVCs.
+# deletionPolicy: Delete so rotation (66- deleting old VolumeSnapshots) frees the Ceph snapshot image.
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: "{{ ceph_vsc_rbd_name }}"
+driver: rbd.csi.ceph.com
+parameters:
+  clusterID: "storage"
+  pool: "{{ ceph_rbd_pool }}"
+  csi.storage.k8s.io/snapshotter-secret-name: csi-rbd-secret
+  csi.storage.k8s.io/snapshotter-secret-namespace: ceph-csi-operator-system
+deletionPolicy: Delete
+---
+# CephFS VolumeSnapshotClass — crash-consistent snapshots of proxmox-cephfs PVCs (subvolume snapshots).
+# deletionPolicy: Delete frees the subvolume snapshot on rotation.
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: "{{ ceph_vsc_cephfs_name }}"
+driver: cephfs.csi.ceph.com
+parameters:
+  clusterID: "storage"
+  fsName: "{{ cephfs_fs_name }}"
+  csi.storage.k8s.io/snapshotter-secret-name: csi-cephfs-secret
+  csi.storage.k8s.io/snapshotter-secret-namespace: ceph-csi-operator-system
+deletionPolicy: Delete

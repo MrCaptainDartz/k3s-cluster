@@ -71,10 +71,15 @@ cluster_cidr: "10.42.0.0/16"
 # Ceph CSI
 # ============================================================
 
-# StorageClasses for RBD and CephFS.
-ceph_sc_rbd_name: "ceph-rbd"
-ceph_sc_rbd_retain_name: "ceph-rbd-retain"
-ceph_sc_cephfs_name: "ceph-cephfs"
+# Default RBD StorageClass (cluster default). reclaimPolicy: Retain: storage NOT freed on PVC delete
+# (explicit, no silent leak) — reclaim the image manually. Snapshots cover accidental deletion.
+ceph_sc_rbd_name: "proxmox-rbd"
+# Opt-in RBD StorageClass, reclaimPolicy: Delete (auto-free Ceph image) for ephemeral, unsnapshotted data.
+ceph_sc_rbd_delete_name: "proxmox-rbd-delete"
+# Default CephFS StorageClass. reclaimPolicy: Retain: subvolume survives accidental PVC deletion.
+ceph_sc_cephfs_name: "proxmox-cephfs"
+# Opt-in CephFS StorageClass, reclaimPolicy: Delete (auto-free subvolume) for ephemeral shared data.
+ceph_sc_cephfs_delete_name: "proxmox-cephfs-delete"
 
 ceph_csi_operator_version: "v1.0.4"
 
@@ -99,6 +104,36 @@ cephfs_fs_name: "cephfs1_ssd"
 
 # CephFS subvolume group used by the CSI driver (must exist in Ceph)
 cephfs_subvolumegroup: "csi"
+
+# ============================================================
+# Volume snapshots (optional) — opt-in CSI snapshots of PVCs
+# ============================================================
+# CSI external-snapshotter version (CRDs + snapshot-controller, always-on group 57-58).
+# K3s does NOT bundle the VolumeSnapshot CRDs/snapshot-controller — we install them.
+csi_snapshotter_version: "v8.6.0"
+
+# VolumeSnapshotClass names (always-on, declared by 59-). Match the snapshot_class field below.
+ceph_vsc_rbd_name: "ceph-rbd"
+ceph_vsc_cephfs_name: "ceph-cephfs"
+
+# kubectl image used by the snapshotter CronJobs. Must ship a shell + coreutils (the CronJob
+# script uses /bin/sh with heredoc/grep/sed/sort/xargs/date). registry.k8s.io/kubectl is
+# distroless (no shell); bitnami/kubectl dropped its version tags. alpine/k8s bundles kubectl
+# + busybox tools, pinned by k8s version. Pin to the cluster's k8s minor.
+volume_snapshot_kubectl_image: "alpine/k8s"
+volume_snapshot_kubectl_version: "1.36.2"
+
+# Per-application PVC snapshots. One CronJob per entry, in the app's own namespace. The CronJob creates a
+# timestamped VolumeSnapshot of the PVC and prunes the oldest beyond retention. Crash-consistent only.
+# Leave empty ([]) to deploy no snapshotter. See README "Backups (stateful apps)" for the full guide.
+volume_snapshots: []
+  # Exemple de configuration (remplacer `[]` par cette liste) :
+  # - name: minio-data          # snapshot name prefix + CronJob name suffix
+  #   pvc: minio                # PVC to snapshot
+  #   namespace: storage        # namespace of the PVC (and the CronJob)
+  #   snapshot_class: ceph-rbd  # VolumeSnapshotClass from 57- (ceph-rbd or ceph-cephfs)
+  #   schedule: "0 */6 * * *"   # cron schedule
+  #   retention: 8              # number of snapshots to keep
 
 # ============================================================
 # MetalLB — LoadBalancer
@@ -280,7 +315,7 @@ k3s_server_manifests_templates:
   - 13-pod-security.yml.j2
 
 # ------------------------------------------------------------
-# Ceph CSI manifests (always-on primary storage, own group 50-56)
+# Ceph CSI manifests (always-on primary storage, own group 50-59)
 # ------------------------------------------------------------
 # Ceph CSI manifests (always-on primary storage).
 ceph_manifest_urls:
@@ -291,11 +326,27 @@ ceph_manifest_urls:
   - url: "https://raw.githubusercontent.com/ceph/ceph-csi-operator/{{ ceph_csi_operator_version }}/deploy/multifile/operator.yaml"
     filename: 54-ceph-csi-operator.yaml
 
+# CSI external-snapshotter (always-on) — VolumeSnapshot CRDs + snapshot-controller.
+# K3s does not bundle these; the VolumeSnapshotClasses (59-) and snapshotter CronJobs (66-)
+# depend on them. Apply order: CRDs (57) -> controller (58) before the Ceph VSC (59).
+csi_snapshotter_manifest_urls:
+  - url: "https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ csi_snapshotter_version }}/client/config/crd/snapshot.storage.k8s.io_volumesnapshotclasses.yaml"
+    filename: 57-volumesnapshotclasses-crd.yaml
+  - url: "https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ csi_snapshotter_version }}/client/config/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml"
+    filename: 57-volumesnapshotcontents-crd.yaml
+  - url: "https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ csi_snapshotter_version }}/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml"
+    filename: 57-volumesnapshots-crd.yaml
+  - url: "https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ csi_snapshotter_version }}/deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml"
+    filename: 58-snapshot-controller-rbac.yaml
+  - url: "https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{{ csi_snapshotter_version }}/deploy/kubernetes/snapshot-controller/setup-snapshot-controller.yaml"
+    filename: 58-snapshot-controller.yaml
+
 ceph_manifest_templates:
   - 50-ceph-secrets.yml.j2
   - 51-ceph-storageclasses.yml.j2
   - 55-ceph-csi-operator-config.yml.j2
   - 56-ceph-network-policies.yml.j2
+  - 59-ceph-volumesnapshot-classes.yml.j2
 
 # ------------------------------------------------------------
 # Optional CSI driver manifests (NFS / SMB)
@@ -355,3 +406,10 @@ observability_manifest_templates:
   - 63-node-exporter.yml.j2
   - 64-observability-network-policies.yml.j2
   - 65-observability-rules.yml.j2
+
+# ------------------------------------------------------------
+# Optional volume snapshot CronJobs
+# ------------------------------------------------------------
+# Optional per-application snapshot CronJobs, appended by site.yml if volume_snapshots is non-empty.
+volume_snapshots_manifest_templates:
+  - 66-volume-snapshots.yml.j2

@@ -1,0 +1,163 @@
+---
+# Per-application PVC snapshots (opt-in via volume_snapshots in all.yml). One CronJob per entry, in the
+# app's own namespace (namespaced RBAC). The CronJob creates a timestamped VolumeSnapshot of the PVC and
+# prunes the oldest beyond retention. Snapshots are crash-consistent — not app-consistent (no quiesce);
+# for databases prefer an application dump. Snapshots live in Ceph — this is NOT an offsite backup.
+{% if volume_snapshots | default([]) | length > 0 %}
+{% for snap in volume_snapshots %}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: "{{ snap.name }}-snapshotter"
+  namespace: "{{ snap.namespace }}"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: "{{ snap.name }}-snapshotter"
+  namespace: "{{ snap.namespace }}"
+rules:
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "{{ snap.name }}-snapshotter"
+  namespace: "{{ snap.namespace }}"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: "{{ snap.name }}-snapshotter"
+subjects:
+  - kind: ServiceAccount
+    name: "{{ snap.name }}-snapshotter"
+    namespace: "{{ snap.namespace }}"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: "{{ snap.name }}-snapshotter"
+  namespace: "{{ snap.namespace }}"
+spec:
+  schedule: "{{ snap.schedule }}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: "{{ snap.name }}-snapshotter"
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: "{{ snap.name }}-snapshotter"
+          containers:
+            - name: snapshotter
+              image: "{{ volume_snapshot_kubectl_image }}:{{ volume_snapshot_kubectl_version }}"
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -euo pipefail
+                  # kubectl does not auto-use the projected SA token (only client-go InClusterConfig
+                  # does); build a kubeconfig from it so calls hit the in-cluster API, not localhost:8080.
+                  export KUBECONFIG=/tmp/kc
+                  cat > "$KUBECONFIG" <<EOF
+                  apiVersion: v1
+                  kind: Config
+                  clusters:
+                  - name: local
+                    cluster:
+                      certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                      server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}
+                  contexts:
+                  - name: default
+                    context:
+                      cluster: local
+                      namespace: {{ snap.namespace }}
+                      user: sa
+                  current-context: default
+                  users:
+                  - name: sa
+                    user:
+                      token: $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+                  EOF
+                  TS="$(date +%Y%m%d-%H%M%S)"
+                  SNAP="{{ snap.name }}-${TS}"
+                  cat <<EOF | kubectl apply -f -
+                  apiVersion: snapshot.storage.k8s.io/v1
+                  kind: VolumeSnapshot
+                  metadata:
+                    name: "${SNAP}"
+                    namespace: "{{ snap.namespace }}"
+                  spec:
+                    volumeSnapshotClassName: "{{ snap.snapshot_class }}"
+                    source:
+                      persistentVolumeClaimName: "{{ snap.pvc }}"
+                  EOF
+                  # Prune oldest beyond retention. kubectl get -o name yields the fully-qualified
+                  # form (volumesnapshot.snapshot.storage.k8s.io/<name>), so match on the /<name>
+                  # suffix and strip up to the last "/". grep guarded so an empty list (e.g. first
+                  # run) doesn't trip set -o pipefail; --wait=false so pruning doesn't block on the
+                  # CSI finalizer reaping the Ceph snapshot image.
+                  kubectl get volumesnapshot -n "{{ snap.namespace }}" -o name \
+                    | { grep "/{{ snap.name }}-[0-9]" || true; } \
+                    | sed 's#.*/##' \
+                    | sort -r \
+                    | tail -n +{{ (snap.retention | default(7) | int) + 1 }} \
+                    | xargs -r -I{} kubectl delete volumesnapshot {} --wait=false -n "{{ snap.namespace }}"
+              volumeMounts:
+                - name: tz-config
+                  mountPath: /etc/localtime
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 32Mi
+          volumes:
+            - name: tz-config
+              hostPath:
+                path: /etc/localtime
+                type: File
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-{{ snap.name }}-snapshotter
+  namespace: "{{ snap.namespace }}"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: "{{ snap.name }}-snapshotter"
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: {{ node_cidr }}
+      ports:
+        - protocol: TCP
+          port: 6443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{% endfor %}
+{% endif %}

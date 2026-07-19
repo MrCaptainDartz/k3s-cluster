@@ -1,5 +1,9 @@
 ---
-# RBD (block) StorageClass — cluster default. reclaimPolicy: Delete (block PVCs are ephemeral app data; reclaims Ceph image, keeps pool tidy).
+# RBD (block) StorageClass — cluster default. reclaimPolicy: Retain: the Ceph image is NOT freed on
+# PVC delete (explicit — no silent leaked storage). Reclaim manually (delete the PV, then `rbd rm`;
+# remove VolumeSnapshots first or they block deletion). Snapshots cover accidental deletion; Delete as
+# the default would mislead, since the image is only trashed (still consuming space) while snapshots
+# reference it.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -17,18 +21,19 @@ parameters:
   csi.storage.k8s.io/controller-expand-secret-namespace: ceph-csi-operator-system
   csi.storage.k8s.io/node-stage-secret-name: csi-rbd-secret
   csi.storage.k8s.io/node-stage-secret-namespace: ceph-csi-operator-system
-reclaimPolicy: Delete
+reclaimPolicy: Retain
 allowVolumeExpansion: true
 mountOptions:
   - discard
 ---
-# RBD (block) StorageClass — Retain variant for data that must NOT be lost on PVC deletion (DBs, app data
-# you can't regenerate). No default annotation -> opt-in by explicit storageClassName. Ceph image is kept
-# on PVC delete (PV -> Released); reclaim the backing image manually once (rbd rm) — see table-rase notes.
+# RBD (block) StorageClass — opt-in, reclaimPolicy: Delete (auto-free the Ceph image on PVC delete) for
+# genuinely ephemeral, unsnapshotted data (scratch, build caches). No default annotation. Caveat: with
+# VolumeSnapshots the image is only trashed (not deleted) until they are removed — honest only for
+# throwaway volumes you don't snapshot.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: "{{ ceph_sc_rbd_retain_name }}"
+  name: "{{ ceph_sc_rbd_delete_name }}"
 provisioner: rbd.csi.ceph.com
 parameters:
   clusterID: "storage"
@@ -40,12 +45,13 @@ parameters:
   csi.storage.k8s.io/controller-expand-secret-namespace: ceph-csi-operator-system
   csi.storage.k8s.io/node-stage-secret-name: csi-rbd-secret
   csi.storage.k8s.io/node-stage-secret-namespace: ceph-csi-operator-system
-reclaimPolicy: Retain
+reclaimPolicy: Delete
 allowVolumeExpansion: true
 mountOptions:
   - discard
 ---
-# CephFS (shared FS) StorageClass. reclaimPolicy: Retain: durable data survives accidental PVC deletion (subvolume -> Released PV, re-importable); cost is manual cleanup of orphans.
+# CephFS (shared FS) StorageClass — cluster default. reclaimPolicy: Retain: the subvolume survives an
+# accidental PVC deletion (durable shared data); cost is manual cleanup of orphaned subvolumes.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -61,4 +67,23 @@ parameters:
   csi.storage.k8s.io/node-stage-secret-name: csi-cephfs-secret
   csi.storage.k8s.io/node-stage-secret-namespace: ceph-csi-operator-system
 reclaimPolicy: Retain
+allowVolumeExpansion: true
+---
+# CephFS (shared FS) StorageClass — opt-in, reclaimPolicy: Delete (auto-free the subvolume on PVC delete)
+# for ephemeral shared data. No default annotation.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: "{{ ceph_sc_cephfs_delete_name }}"
+provisioner: cephfs.csi.ceph.com
+parameters:
+  clusterID: "storage"
+  fsName: "{{ cephfs_fs_name }}"
+  csi.storage.k8s.io/provisioner-secret-name: csi-cephfs-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: ceph-csi-operator-system
+  csi.storage.k8s.io/controller-expand-secret-name: csi-cephfs-secret
+  csi.storage.k8s.io/controller-expand-secret-namespace: ceph-csi-operator-system
+  csi.storage.k8s.io/node-stage-secret-name: csi-cephfs-secret
+  csi.storage.k8s.io/node-stage-secret-namespace: ceph-csi-operator-system
+reclaimPolicy: Delete
 allowVolumeExpansion: true
