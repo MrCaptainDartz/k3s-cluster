@@ -51,6 +51,33 @@ k3s_server:
   # kube-proxy metrics on :10249 (HTTP). In-process on every node -> same control-plane IPs.
   kube-proxy-arg:
     - "metrics-bind-address=0.0.0.0"
+  # kube-apiserver audit logging (gated on audit_enabled). Empty list when disabled -> no arg passed.
+  # The policy file is dropped by a site.yml pre_task BEFORE the role restarts the apiserver. Requires
+  # observability_enabled for the Alloy file source to ship audit.log to Loki (see 62-alloy).
+  kube-apiserver-arg: "{{ audit_enabled | bool | ternary(audit_apiserver_args, []) }}"
+
+# ============================================================
+# kube-apiserver audit logging (optional) — forensics: who did what to the API
+# ============================================================
+# Enable API server audit logging (security baseline). Writes JSON audit events to a host file
+# (/var/log/k3s/audit.log) on each control-plane node; Alloy tails it into Loki (see 62-alloy).
+# Policy is security-focused + low-volume: skips system/kubelet reads + events, logs secret reads
+# (Metadata only, no body) and ALL write ops (cluster mutations). See site.yml pre_task for the policy.
+# Restart: adding kube-apiserver-arg restarts k3s on each server — run with --forks 1 so the rolling
+# restart keeps etcd quorum (only one apiserver down at a time, 2 alive = 2/3 quorum).
+audit_enabled: false
+audit_policy_path: "/etc/rancher/k3s/audit-policy.yaml"
+audit_log_path: "/var/log/k3s/audit.log"
+audit_log_maxage: 7      # days of rotated audit logs to keep
+audit_log_maxbackup: 3   # number of rotated audit logs to retain
+audit_log_maxsize: 10    # MB per audit log file before rotation
+audit_apiserver_args:
+  - "audit-policy-file={{ audit_policy_path }}"
+  - "audit-log-path={{ audit_log_path }}"
+  - "audit-log-format=json"
+  - "audit-log-maxage={{ audit_log_maxage }}"
+  - "audit-log-maxbackup={{ audit_log_maxbackup }}"
+  - "audit-log-maxsize={{ audit_log_maxsize }}"
 
 # ============================================================
 # CoreDNS — HA replica count

@@ -171,6 +171,85 @@
       when:
         - observability_enabled | bool
         - journald_conf.changed | default(false)
+
+    # kube-apiserver audit logging: drop the audit policy + log dir on each control-plane node BEFORE the
+    # k3s role restarts the apiserver with --audit-policy-file (the kube-apiserver-arg is in k3s_server).
+    # Gated on audit_enabled. Workers (k3s_control_node=false) are skipped — the apiserver runs on servers
+    # only. Restart safety: run the playbook with --forks 1 so the role restarts servers one at a time and
+    # etcd keeps quorum (2 alive of 3 while one restarts). Policy is security-focused + low-volume.
+    - name: Ensure audit directories (policy + log) on control planes
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ audit_policy_path | dirname }}"
+        - "{{ audit_log_path | dirname }}"
+      become: true
+      when:
+        - audit_enabled | bool
+        - k3s_control_node | bool
+
+    - name: Deploy kube-apiserver audit policy on control planes
+      ansible.builtin.copy:
+        dest: "{{ audit_policy_path }}"
+        content: |
+          apiVersion: audit.k8s.io/v1
+          kind: Policy
+          omitStages:
+            - RequestReceived
+          rules:
+            # Skip routine reads by control-plane components (scheduler/cm/apiserver watch loops).
+            - level: None
+              users: ["system:apiserver", "system:kube-scheduler", "system:kube-controller-manager"]
+              verbs: ["get", "list", "watch"]
+            # Skip all reads by kubelets (system:nodes) — cuts the bulk of pod/secret-mount noise.
+            - level: None
+              userGroups: ["system:nodes"]
+              verbs: ["get", "list", "watch"]
+            # Skip kubelet pod/node status updates (high-volume, low forensic value).
+            - level: None
+              userGroups: ["system:nodes"]
+              verbs: ["update", "patch"]
+              resources:
+                - group: ""
+                  resources: ["pods", "pods/status", "nodes", "nodes/status"]
+            # Skip leader-election lease renewals (the dominant write-volume noise).
+            - level: None
+              resources:
+                - group: "coordination.k8s.io"
+                  resources: ["leases"]
+            # Skip authn/authz webhook checks (subjectaccessreviews / tokenreviews).
+            - level: None
+              resources:
+                - group: "authorization.k8s.io"
+                  resources: ["subjectaccessreviews", "tokenreviews"]
+                - group: "authentication.k8s.io"
+                  resources: ["tokenreviews"]
+            # Skip Events (both API groups — core/v1 and events.k8s.io).
+            - level: None
+              resources:
+                - group: "events.k8s.io"
+                  resources: ["events"]
+                - group: ""
+                  resources: ["events"]
+            # Log who reads secrets (non-node actors) — Metadata only: NO secret body in the log.
+            - level: Metadata
+              resources:
+                - group: ""
+                  resources: ["secrets"]
+              verbs: ["get", "list", "watch"]
+            # Log every real cluster mutation (create/update/patch/delete) at Metadata.
+            - level: Metadata
+              verbs: ["create", "update", "patch", "delete", "deletecollection"]
+            # Default: don't log reads of non-sensitive resources.
+            - level: None
+        mode: "0644"
+      become: true
+      when:
+        - audit_enabled | bool
+        - k3s_control_node | bool
+
   roles:
     - role: xanmanning.k3s
 

@@ -177,6 +177,8 @@ Here are some important variables based on the provided examples:
 | `k3s_etcd_snapshot_cron` | `0 */6 * * *`                        | Cron expression for scheduled etcd snapshots (embedded etcd only).   |
 | `k3s_etcd_snapshot_retention` | `28`                         | Snapshots retained per control-plane node (≈ 7 days at 6 h intervals). |
 | `coredns_replicas`    | `3`                                    | CoreDNS replica count, re-asserted by a `post_tasks` step (no K3s flag exists; K3s v1.25.5+ doesn't pin replicas so the scale persists). `topologySpreadConstraints` spread pods one-per-node → HA. See "CoreDNS high availability". |
+| `audit_enabled`       | `false`                                | Enable kube-apiserver audit logging (security forensics: who did what to the API). Writes JSON events to `/var/log/k3s/audit.log` on each control plane; Alloy tails them into Loki. Requires `observability_enabled` for shipping. See [API server audit logs](#api-server-audit-logs). |
+| `audit_log_maxage` / `_maxbackup` / `_maxsize` | `7` / `3` / `10`          | apiserver-side audit log rotation: days kept, rotated files retained, MB per file before rotation. Bounded on-disk; Loki retention is separate (`observability_loki_retention`). |
 | `k3s_vip`             | `192.168.1.10`                         | The target IP for kube-vip. This IP must be available on the network.  |
 | `k3s_vip_interface`   | `` (empty = auto)                     | Interface announcing the VIP. Empty -> auto-resolved by a `pre_task` to the interface whose subnet matches `node_cidr` (multi-NIC safe — does not rely on the default-route interface). Set a name explicitly to override. |
 | `node_cidr`           | `192.168.1.0/24`                       | Node-network CIDR (control planes + workers); used by the cert-manager NetworkPolicy (apiserver ingress/API egress). |
@@ -1058,6 +1060,39 @@ Two host-side requirements, both handled by `site.yml` pre-tasks gated on `obser
 - **Host `machine-id` overlay.** `loki.source.journal` resolves `/var/log/journal/<machine-id>/` from the **container's** machine-id, which differs from the host's → it would find nothing. `62-` mounts the host `/etc/machine-id` (readOnly) over the container's, and runs Alloy as **root** (`runAsUser: 0`) because journal files are `root:systemd-journal` 0640. Root is allowed because `observability-host` is PSS-exempt.
 
 No NetworkPolicy change is needed — `loki.source.journal` reads the host filesystem only. In Loki/Grafana, filter the control-plane logs with `{job="journald", unit="k3s.service"}`.
+
+#### API server audit logs
+
+`audit_enabled` (default `false`) turns on kube-apiserver **audit logging** — the security-baseline answer to "who did what to the API". The apiserver writes JSON audit events to a host file `/var/log/k3s/audit.log` on each control plane (`kube-apiserver-arg: audit-policy-file / audit-log-path / audit-log-format=json / audit-log-max*` in `k3s_server`); the policy file itself is dropped by a `site.yml` pre_task **before** the role restarts the apiserver. Alloy tails that file into Loki via a dedicated `loki.source.file "audit"` block in `62-` (distinct stream `job="apiserver-audit"`, no NetworkPolicy change — Alloy reads the host file as root, like the journald pipeline).
+
+**Policy (security-focused + low-volume).** First-match-wins, `Metadata` level (no request/response bodies — and **no secret body** even for secret reads):
+
+1. Skip routine **reads** by control-plane components (apiserver/scheduler/controller-manager) and by kubelets (`system:nodes`).
+2. Skip kubelet **pod/node status updates** (the high-volume `update`/`patch` noise).
+3. Skip **lease renewals** (`coordination.k8s.io/leases`), **authz/authn webhook checks** (`subjectaccessreviews`/`tokenreviews`), and **Events** (both `events.k8s.io` and core/v1).
+4. **Log secret reads** by non-node actors (`Metadata` — who read which secret, not the secret itself).
+5. **Log every real cluster mutation** (`create`/`update`/`patch`/`delete`/`deletecollection`) at `Metadata`.
+6. Default: don't log reads of non-sensitive resources.
+
+The exclusions matter: a naive "log all writes" policy produced ~**392 MB/day per node** (lease renewals + SAR/TR + kubelet status updates dominate); the refined policy drops it to **~4 MB/day per node** (~12 MB/day to Loki across 3 nodes — sustainable against the 10 Gi PVC + 7 d retention). Verify the rate on a control plane:
+
+```bash
+sudo ls -la /var/log/k3s/audit.log
+s1=$(sudo stat -c %s /var/log/k3s/audit.log); sleep 60; s2=$(sudo stat -c %s /var/log/k3s/audit.log)
+echo "~$(( (s2-s1)*86400/60/1024/1024 )) MB/day/node"
+# recent entries should be real mutations, no leases/SAR/events:
+sudo tail -50 /var/log/k3s/audit.log | grep -cE "coordination.k8s.io|subjectaccessreviews|tokenreviews|/events\?"  # -> 0
+```
+
+Query in Grafana's log explorer:
+
+```logql
+{job="apiserver-audit"} | json                                 # all audit events
+{job="apiserver-audit"} | json | verb="delete"                 # every deletion
+{job="apiserver-audit"} | json | resource="secrets"            # who read/wrote secrets
+```
+
+> **Restart caveat.** Adding `kube-apiserver-arg` changes the k3s server config → the role restarts k3s on each server, and the apiserver loads the audit policy **only at startup** (no hot-reload — a policy edit needs another restart). With 3 etcd members, run the playbook with `--forks 1` so servers restart one at a time and etcd keeps quorum (2 alive of 3 while one restarts). The pre_task that drops the policy file runs **before** the role, so the file is in place before the first restart.
 
 ### NFS & SMB CSI
 

@@ -127,6 +127,39 @@ spec:
             relabel_rules = discovery.relabel.journal.rules
           }
 
+          // kube-apiserver audit logs (JSON lines) at /var/log/k3s/audit.log — present on control-plane
+          // nodes only (the apiserver runs in the k3s process on servers). file_match no-ops where the file
+          // is absent (workers, or when audit_enabled=false) -> zero targets, no logs shipped. /var/log is
+          // mounted (varlog: true above) and Alloy runs as root -> can read the apiserver-owned file.
+          // Distinct Loki stream: {job="apiserver-audit", node=...}; query with | json (auditEvent records).
+          local.file_match "audit" {
+            path_targets = [
+              {
+                __path__ = "/var/log/k3s/audit.log",
+              },
+            ]
+          }
+
+          discovery.relabel "audit" {
+            targets = local.file_match.audit.targets
+
+            rule {
+              target_label = "job"
+              replacement  = "apiserver-audit"
+              action       = "replace"
+            }
+            rule {
+              target_label = "node"
+              replacement  = sys.env("K8S_NODE_NAME")
+              action       = "replace"
+            }
+          }
+
+          loki.source.file "audit" {
+            targets    = discovery.relabel.audit.output
+            forward_to = [loki.write.loki.receiver]
+          }
+
           loki.write "loki" {
             endpoint {
               url = "http://loki.{{observability_namespace}}.svc:3100/loki/api/v1/push"
