@@ -1,3 +1,5 @@
+nodeExporter:
+  enabled: false
 prometheus:
   prometheusSpec:
     serviceMonitorSelectorNilUsesHelmValues: false
