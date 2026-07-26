@@ -169,6 +169,7 @@
       delay: 3
       until: coredns_exists.rc == 0
       when: inventory_hostname == (groups['k3s_cluster'] | first)
+      become: true
 
     - name: Read current CoreDNS replica count
       ansible.builtin.command:
@@ -185,6 +186,7 @@
       changed_when: false
       register: coredns_current_replicas
       when: inventory_hostname == (groups['k3s_cluster'] | first)
+      become: true
 
     - name: Scale CoreDNS to {{ coredns_replicas }}
       ansible.builtin.command:
@@ -200,6 +202,7 @@
       when:
         - inventory_hostname == (groups['k3s_cluster'] | first)
         - (coredns_current_replicas.stdout | int) != (coredns_replicas | int)
+      become: true
 
     - name: Enforce strict PodAntiAffinity for CoreDNS
       ansible.builtin.command:
@@ -208,6 +211,7 @@
       when:
         - inventory_hostname == (groups['k3s_cluster'] | first)
       changed_when: false
+      become: true
 
     # Post-deploy verification (ensure auto-deploy resources actually rolled out)
     - name: Verify Traefik DaemonSet is rolled out
@@ -227,6 +231,7 @@
       delay: 5
       until: verify_traefik.rc == 0
       when: inventory_hostname == (groups['k3s_cluster'] | first)
+      become: true
 
     - name: Verify MetalLB controller is rolled out
       ansible.builtin.command:
@@ -245,12 +250,14 @@
       delay: 5
       until: verify_metallb.rc == 0
       when: inventory_hostname == (groups['k3s_cluster'] | first)
+      become: true
 
     # Kubeconfig for ansible_user
     - name: Check if k3s kubeconfig exists on node
       ansible.builtin.stat:
         path: /etc/rancher/k3s/k3s.yaml
       register: k3s_kubeconfig
+      become: true
 
     - name: Create .kube directory for ansible_user
       ansible.builtin.file:
@@ -270,3 +277,4 @@
         group: "{{ ansible_user }}"
         mode: '0600'
       when: k3s_kubeconfig.stat.exists
+      become: true
