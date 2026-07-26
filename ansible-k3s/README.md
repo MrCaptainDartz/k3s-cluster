@@ -182,6 +182,11 @@ Here are some important variables based on the provided examples:
 | `node_cidr`           | `192.168.1.0/24`                       | Node-network CIDR (control planes + workers); used by the cert-manager NetworkPolicy (apiserver ingress/API egress). |
 | `metallb_ip_range`    | `192.168.1.150-192.168.1.199`          | The IP range dynamically assigned by MetalLB to your applications.     |
 | `traefik_lb_ip`       | `192.168.1.199`                        | Fixed MetalLB IP pinned to Traefik's LoadBalancer Service (must be within `metallb_ip_range`). |
+| `traefik_access_log_enabled` | `false`                         | Enable Traefik access logs (forensics only — errors + slow requests). Flip to `true` together with `observability_enabled` (Alloy tails Traefik's stdout via the existing pod-log pipeline → Loki). See [Traefik access logs](#traefik-access-logs). |
+| `traefik_access_log_format` | `json`                          | Access log format: `json` (stable parse in Loki), `common`, or `genericCLF`. |
+| `traefik_access_log_status_codes` | `400-599`                 | Log only requests whose status code is in this range (range syntax supported). |
+| `traefik_access_log_min_duration` | `500ms`                    | ...**or** log requests slower than this (OR-combined with `status_codes`). |
+| `traefik_access_log_buffering_size` | `100`                     | Batch N entries before flushing — fewer I/O syscalls, better throughput at high rps. |
 | `ceph_csi_operator_version` | `v1.0.4`                         | The [ceph-csi-operator](https://github.com/ceph/ceph-csi-operator) release deployed (CRDs, RBAC and operator manifests are pulled from this tag). |
 | `ceph_client_id`      | `admin`                                | The Ceph user used by the CSI driver to authenticate storage requests. |
 | `ceph_client_key`     | `YOUR-CEPH-KEYRING...`                 | The secret key that allows K3s to authenticate storage requests.       |
@@ -941,14 +946,31 @@ The config only overrides what differs from the chart defaults:
 - HTTP → HTTPS redirect (`web` 80 → `websecure` 443).
 - dashboard IngressRoute **on** + its `traefik` entryPoint (container port 8080) **exposed on the LB** — reachable at `http://<LB-IP>:8080/dashboard/`.
 - fixed MetalLB IP via the `metallb.io/loadBalancerIPs` annotation (`traefik_lb_ip`).
+- **access logs — forensics only** (errors + slow requests), JSON, buffered. See [Traefik access logs](#traefik-access-logs).
 
-Everything else uses chart defaults: both providers (`Ingress` + `IngressRoute`), `websecure` TLS **on** (Traefik serves its **self-signed default cert** when no cert resolver is configured — browsers warn), `service.type: LoadBalancer`, access logs **off**. Point your DNS at `traefik_lb_ip` and create `Ingress`/`IngressRoute` resources.
+Everything else uses chart defaults: both providers (`Ingress` + `IngressRoute`), `websecure` TLS **on** (Traefik serves its **self-signed default cert** when no cert resolver is configured — browsers warn), `service.type: LoadBalancer`. Point your DNS at `traefik_lb_ip` and create `Ingress`/`IngressRoute` resources.
 
 **TLS**: Traefik serves its **self-signed default cert** until you enable the optional **cert-manager** below (Let's Encrypt DNS-01) and annotate your Ingress.
 
 **Dashboard**: the chart convenience IngressRoute has no host and no auth. It is bound to the internal `traefik` entryPoint (container port 8080), which the HelmChartConfig exposes on the LoadBalancer — so it's reachable at `http://<traefik_lb_ip>:8080/dashboard/` from anything that can hit the LB (HTTP, not HTTPS; it's a separate port from `web`/`websecure`, so the 80→443 redirect doesn't apply). Fine on a LAN; if you expose the cluster beyond it, drop `ports.traefik.expose` and instead bind the dashboard to a host behind TLS + basic-auth/IP-allow via your own `IngressRoute`.
 
 **NetworkPolicy**: Traefik runs in `kube-system` (no deny there) but forwards to app namespaces under `default-deny-all` — allow ingress from Traefik's pods, see [Step 5](#step-5--only-if-the-app-must-be-reached-from-outside-allow-ingress).
+
+#### Traefik access logs
+
+The HelmChartConfig enables Traefik access logs in **JSON**, but **forensics-only** — not full per-request traffic. Two OR-connected filters (`statuscodes: 400-599` + `minduration: 500ms`, gated by `traefik_access_log_enabled`) keep a log line only if the request **errored** *or* was **slow**; normal 2xx/3xx fast traffic is **not** logged. Traefik's `keepAccessLog` is OR-connected ([source](https://github.com/traefik/traefik/blob/master/pkg/middlewares/accesslog/logger.go)), so the two filters union rather than intersect. `bufferingSize: 100` batches entries before flushing (fewer I/O syscalls).
+
+**Why not full logs?** Per-request access logging is untenable at high throughput: at 10 Gb/s with ~100 KB objects (~12.5k req/s) it would ship ~324 GB/day of logs and fill the 10 Gi Loki PVC in ~40 minutes, and the CPU Alloy spends tailing/parsing/shipping would compete with Traefik's own TLS-termination budget. **Throughput, latency and status-code volume come from Traefik's Prometheus metrics** (`:9100`, already scraped by the `65-` ServiceMonitor) — that is the right tool for "how much traffic / how slow / how many errors". **Access logs are for forensics**: *which exact request* failed, *which path* was slow, *which client*. Keeping only errors + slow caps the volume to a tiny fraction and keeps the Alloy pipeline idle for normal traffic.
+
+No new component or NetworkPolicy is needed: Traefik writes access logs to **stdout**, containerd writes them to `/var/log/pods/.../traefik/*.log`, and the existing **file-based** Alloy pod-log pipeline (the one already tailing pod logs) picks them up and ships them to Loki with the standard labels (`container=traefik`, `namespace=kube-system`, `node`, `pod`). Query in Grafana's log explorer with:
+
+```logql
+{container="traefik", namespace="kube-system"}  # all kept access logs (errors + slow)
+| json
+| DownstreamStatus >= 400                         # just the errors
+```
+
+> The access-log `fields.headers.defaultMode` is left at the chart default `drop` (no request headers logged) and `fields.general.defaultMode: keep` — so each line carries the full standard set (method, path, status, duration, TLS version, entrypoint, client) without sensitive headers. Tighten further via `logs.access.fields` in the HelmChartConfig if you need to redact or drop specific fields.
 
 ### cert-manager (TLS) — optional
 

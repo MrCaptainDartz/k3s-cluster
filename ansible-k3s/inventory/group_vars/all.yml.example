@@ -167,6 +167,18 @@ metallb_pool_name: "default-pool"
 # Fixed MetalLB IP for Traefik's LoadBalancer Service.
 traefik_lb_ip: "192.168.1.199"
 
+# Traefik access logs — forensics only (errors + slow requests), NOT full traffic.
+# Filtered at the source (Traefik filters are OR-connected): a request is logged only if its status code
+# is in `traefik_access_log_status_codes` OR it takes longer than `traefik_access_log_min_duration`.
+# Normal 2xx/3xx fast traffic is NOT logged -> ~0 volume to Loki. Throughput/latency volume comes from
+# Traefik metrics (:9100, already scraped by 65-), not from logs. Requires observability_enabled (Alloy
+# tails Traefik's stdout via the existing pod-log pipeline). See templates/12-traefik-config.yml.j2.
+traefik_access_log_enabled: false         # off by default; flip to true with observability_enabled
+traefik_access_log_format: json           # json (stable parse in Loki) | common | genericCLF
+traefik_access_log_status_codes: "400-599" # log these status codes (range syntax supported)
+traefik_access_log_min_duration: "500ms"  # ...OR log requests slower than this
+traefik_access_log_buffering_size: 100    # batch N entries before flush (fewer I/O syscalls, perf)
+
 # ============================================================
 # cert-manager (optional) — real TLS via Let's Encrypt DNS-01
 # ============================================================
