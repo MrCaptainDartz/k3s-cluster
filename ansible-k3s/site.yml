@@ -265,10 +265,8 @@
       ansible.builtin.copy:
         src: /etc/rancher/k3s/k3s.yaml
         dest: "~{{ ansible_user }}/.kube/config"
-        remote_src: yes
+        remote_src: true
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
         mode: '0600'
       when: k3s_kubeconfig.stat.exists
-
-
