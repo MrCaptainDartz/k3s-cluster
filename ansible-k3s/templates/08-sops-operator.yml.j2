@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: secrets-system
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sops-age
+  namespace: secrets-system
+  labels:
+    sops.addons.projectcapsule.dev: "true"
+stringData:
+  age.agekey: "{{ age_private_key }}"
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: sops-operator
+  namespace: kube-system
+spec:
+  chart: oci://ghcr.io/peak-scale/charts/sops-operator
+  version: "0.10.1"
+  targetNamespace: secrets-system

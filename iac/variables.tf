@@ -1,6 +1,4 @@
-# ============================================================
 # Provider / API Proxmox
-# ============================================================
 
 variable "proxmox_api_url" {
   type        = string
@@ -25,9 +23,7 @@ variable "proxmox_insecure" {
   default     = true
 }
 
-# ============================================================
 # Image Cloud-Init
-# ============================================================
 
 variable "ubuntu_cloud_image_url" {
   type        = string
@@ -47,9 +43,7 @@ variable "image_datastore_id" {
   default     = "local"
 }
 
-# ============================================================
 # VMs — Configuration (network, node, identifier)
-# ============================================================
 
 variable "vm_config" {
   type = map(object({
@@ -87,9 +81,7 @@ variable "vm_config" {
   }
 }
 
-# ============================================================
 # VM — Resources
-# ============================================================
 
 variable "vm_keyboard_layout" {
   type        = string
@@ -182,14 +174,10 @@ variable "vm_tags" {
   default     = ["k3s", "opentofu"]
 }
 
-# ============================================================
 # VM — Network
 # (Global network variables are carried by each interface in vm_config)
-# ============================================================
 
-# ============================================================
 # VM — Cloud-Init / Access
-# ============================================================
 
 variable "vm_user" {
   type        = string

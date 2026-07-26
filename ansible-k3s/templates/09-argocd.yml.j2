@@ -1,0 +1,47 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argocd-repo-creds
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: repository
+data:
+  type: "{{ 'git' | b64encode }}"
+  url: "{{ argocd_git_repository_url | b64encode }}"
+  sshPrivateKey: "{{ argocd_git_deploy_key | b64encode }}"
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: argocd
+  namespace: kube-system
+spec:
+  chart: argo-cd
+  repo: "{{ argocd_helm_repo }}"
+  version: "{{ argocd_helm_version }}"
+  targetNamespace: argocd
+  valuesContent: |-
+    global:
+      domain: "{{ argocd_domain }}"
+    server:
+      extraArgs:
+        - --insecure
+      ingress:
+        enabled: true
+        ingressClassName: traefik
+        annotations:
+          # Use default Traefik cert because cert-manager is not yet deployed!
+          traefik.ingress.kubernetes.io/router.tls: "true"
+        hosts:
+          - "{{ argocd_domain }}"
+    configs:
+      cm:
+        timeout.reconciliation: 10s

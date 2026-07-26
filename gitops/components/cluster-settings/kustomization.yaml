@@ -1,0 +1,23 @@
+# Shared Kustomize Component: single source of truth for cluster-specific (non-secret) values.
+# Consumed by `components: [../../components/cluster-settings]`. Bypasses load-restrictor by bundling as a Component.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - cluster-settings.yaml
+configurations:
+  - kustomizeconfig.yaml
+vars:
+  - name: REPO_URL
+    objref:
+      kind: ConfigMap
+      name: cluster-settings
+      apiVersion: v1
+    fieldref:
+      fieldpath: data.repoURL
+  - name: TARGET_REVISION
+    objref:
+      kind: ConfigMap
+      name: cluster-settings
+      apiVersion: v1
+    fieldref:
+      fieldpath: data.targetRevision

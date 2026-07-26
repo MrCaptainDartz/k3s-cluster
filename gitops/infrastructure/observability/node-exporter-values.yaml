@@ -1,0 +1,8 @@
+prometheus:
+  monitor:
+    enabled: true
+    additionalLabels:
+      release: kube-prometheus-stack
+hostNetwork: true
+tolerations:
+  - operator: Exists

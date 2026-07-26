@@ -1,0 +1,27 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: "smb-photos"
+provisioner: smb.csi.k8s.io
+parameters:
+  source: "//nas.example.com/photos"
+  csi.storage.k8s.io/provisioner-secret-name: "csi-smb-creds"
+  csi.storage.k8s.io/provisioner-secret-namespace: "${pvc.namespace}"
+  csi.storage.k8s.io/node-stage-secret-name: "csi-smb-creds"
+  csi.storage.k8s.io/node-stage-secret-namespace: "${pvc.namespace}"
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: "smb-movies"
+provisioner: smb.csi.k8s.io
+parameters:
+  source: "//nas.example.com/movies"
+  csi.storage.k8s.io/provisioner-secret-name: "csi-smb-creds"
+  csi.storage.k8s.io/provisioner-secret-namespace: "${pvc.namespace}"
+  csi.storage.k8s.io/node-stage-secret-name: "csi-smb-creds"
+  csi.storage.k8s.io/node-stage-secret-namespace: "${pvc.namespace}"
+volumeBindingMode: Immediate
+allowVolumeExpansion: true

@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: argocd
+components:
+  - ../../components/cluster-settings
+resources:
+  - ceph-csi.yaml
+  - cert-manager.yaml
+  - external-dns.yaml
+  - external-snapshotter.yaml
+  - kured.yaml
+  - nfs-csi.yaml
+  - observability.yaml
+  - smb-csi.yaml
+  - sops-providers.yaml

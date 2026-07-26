@@ -1,9 +1,7 @@
 # Example file for sensitive data and configuration variables.
 # Copy this file to 'terraform.tfvars' and fill in your values.
 
-# ----------------------------------------------------------------
 # Proxmox API (mandatory)
-# ----------------------------------------------------------------
 proxmox_api_url   = "https://10.x.x.x:8006/api2/json"
 proxmox_api_token = "root@pam!opentofu=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
@@ -13,15 +11,11 @@ proxmox_insecure = true
 # SSH user to access Proxmox nodes (default: root)
 # proxmox_ssh_username = "root"
 
-# ----------------------------------------------------------------
 # SSH Access (mandatory)
-# ----------------------------------------------------------------
 ssh_public_key = "ssh-rsa AAAAB3NzaC1yc... myuser@myworkstation"
 
-# ----------------------------------------------------------------
 # VM Configuration (optional — default values below)
 # Each entry: node_name, and network_interfaces
-# ----------------------------------------------------------------
 # vm_config = {
 #   "vm-hc1" = {
 #     node_name = "srv-tlm-hc1"
@@ -69,9 +63,7 @@ ssh_public_key = "ssh-rsa AAAAB3NzaC1yc... myuser@myworkstation"
 #   }
 # }
 
-# ----------------------------------------------------------------
 # Optional parameters (reasonable default values)
-# ----------------------------------------------------------------
 
 # Cloud-Init Image
 # ubuntu_cloud_image_url      = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"

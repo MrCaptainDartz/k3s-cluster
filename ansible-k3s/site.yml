@@ -3,14 +3,7 @@
   hosts: k3s_cluster
   gather_facts: true
   pre_tasks:
-    # Force IPv4 preference on the nodes BEFORE the k3s role runs its downloads.
-    # The nodes receive IPv6 default routes (RA) + a global IPv6 address, but IPv6 egress is
-    # blackholed on this network. curl/ruby use Happy Eyeballs (race v4/v6 -> v4 wins, fast), but
-    # Python's urllib (ansible get_url / uri) prefers IPv6 -> it hangs ~40s on the dead v6 path
-    # before falling back to v4. That stalled the role's "download auto-deploying manifests" task
-    # (get_url loop with NO timeout) for minutes on every run, and slowed the k3s binary download
-    # on every node. /etc/gai.conf precedence ::ffff:0:0/96 100 makes glibc getaddrinfo return
-    # IPv4 first, so every urllib-based download skips the dead v6 path. Verified: get_url 43s -> 2.5s.
+    # Force IPv4 preference (blackholed IPv6 delays get_url by 40s)
     - name: Prefer IPv4 in glibc resolver (node IPv6 egress is blackholed)
       ansible.builtin.copy:
         dest: /etc/gai.conf
@@ -47,123 +40,26 @@
           k3s_vip_interface explicitly in inventory/group_vars/all.yml.
       when: k3s_vip_interface | length == 0
 
-    # Dynamically build K3s manifest lists (inline Jinja logic fails in YAML vars lists).
-    # Ceph + CSI external-snapshotter are always appended; others are gated by *_enabled flags.
-    - name: Append Ceph CSI + external-snapshotter manifests (always-on, groups 50-59)
-      ansible.builtin.set_fact:
-        k3s_server_manifests_urls: >-
-          {{
-            k3s_server_manifests_urls
-            + ceph_manifest_urls
-            + csi_snapshotter_manifest_urls
-          }}
-        k3s_server_manifests_templates: >-
-          {{
-            k3s_server_manifests_templates
-            + ceph_manifest_templates
-          }}
-
-    - name: Append optional NFS/SMB CSI driver manifests when enabled
-      ansible.builtin.set_fact:
-        k3s_server_manifests_urls: >-
-          {{
-            k3s_server_manifests_urls
-            + (nfs_enabled | bool | ternary(nfs_manifest_urls, []))
-            + (smb_enabled | bool | ternary(smb_manifest_urls, []))
-          }}
-        k3s_server_manifests_templates: >-
-          {{
-            k3s_server_manifests_templates
-            + (nfs_enabled | bool | ternary(nfs_manifest_templates, []))
-            + (smb_enabled | bool | ternary(smb_manifest_templates, []))
-          }}
-
-    # Append cert-manager and specific DNS webhooks if enabled and configured.
-    - name: Append optional cert-manager manifests when enabled
-      ansible.builtin.set_fact:
-        k3s_server_manifests_urls: >-
-          {{
-            k3s_server_manifests_urls
-            + (certmanager_enabled | bool | ternary(certmanager_manifest_urls, []))
-            + (((certmanager_enabled | bool) and
-                (certmanager_dns_credentials | default([]) | selectattr('provider', 'equalto', 'infomaniak') | list | length > 0))
-               | ternary(certmanager_webhook_infomaniak_urls, []))
-          }}
-        k3s_server_manifests_templates: >-
-          {{
-            k3s_server_manifests_templates
-            + (certmanager_enabled | bool | ternary(certmanager_manifest_templates, []))
-            + (((certmanager_enabled | bool) and
-                (certmanager_dns_credentials | default([]) | selectattr('provider', 'equalto', 'ovh') | list | length > 0))
-               | ternary(certmanager_webhook_ovh_templates, []))
-          }}
-
-    # Observability (kube-prometheus-stack + Loki + Alloy + node-exporter): opt-in, all HelmChart CRs (60-65).
-    - name: Append optional observability manifests when enabled
-      ansible.builtin.set_fact:
-        k3s_server_manifests_urls: >-
-          {{
-            k3s_server_manifests_urls
-            + (observability_enabled | bool | ternary(observability_manifest_urls, []))
-          }}
-        k3s_server_manifests_templates: >-
-          {{
-            k3s_server_manifests_templates
-            + (observability_enabled | bool | ternary(observability_manifest_templates, []))
-          }}
-
-    # Per-application PVC snapshot CronJobs (66-): opt-in, only when volume_snapshots is non-empty.
-    - name: Append optional volume snapshot CronJobs when volume_snapshots is non-empty
+    # Seed ArgoCD with this repo's root-app (11) only when gitops_root_app_enabled.
+    # SOPS Operator (08) and ArgoCD (09) are always installed (baseline). Inline Jinja in the
+    # vars list does not work (the YAML parser runs before templating), so build it here.
+    - name: Append the root-app manifest (11-root-app) when gitops_root_app_enabled
       ansible.builtin.set_fact:
         k3s_server_manifests_templates: >-
           {{
             k3s_server_manifests_templates
-            + (((volume_snapshots | default([])) | length > 0) | ternary(volume_snapshots_manifest_templates, []))
+            + (gitops_root_app_enabled | bool | ternary(['11-root-app.yml.j2'], []))
           }}
 
-    # Kured (Automated Node Reboots)
-    - name: Append optional Kured manifests when enabled
-      ansible.builtin.set_fact:
-        k3s_server_manifests_templates: >-
-          {{
-            k3s_server_manifests_templates
-            + (kured_enabled | bool | ternary(kured_manifest_templates, []))
-          }}
 
-    # ExternalDNS (one instance per DNS cred in certmanager_dns_credentials). Only when enabled AND at
-    # least one DNS cred exists (the 27- template loops certmanager_dns_credentials to build per-cred
-    # Secret + HelmChart CR; 28- is the namespace NetworkPolicy).
-    - name: Append optional ExternalDNS manifests when enabled
-      ansible.builtin.set_fact:
-        k3s_server_manifests_templates: >-
-          {{
-            k3s_server_manifests_templates
-            + (((externaldns_enabled | bool) and
-                ((certmanager_dns_credentials | default([])) | length > 0))
-               | ternary(externaldns_manifest_templates, []))
-          }}
 
-    # CoreDNS PDB
-    - name: Append CoreDNS PodDisruptionBudget
-      ansible.builtin.set_fact:
-        k3s_server_manifests_templates: >-
-          {{
-            k3s_server_manifests_templates
-            + ['68-coredns-pdb.yml.j2']
-          }}
-
-    # Persistent journald: K3s control-plane components log to the host's journald unit (k3s.service).
-    # By default journald is volatile (/run/log/journal, lost on reboot). Make it persistent
-    # (/var/log/journal) so Alloy's loki.source.journal can tail it (the /var/log mount already covers
-    # /var/log/journal; /run/log/journal is NOT mounted). Run before the role so /var/log/journal is
-    # populated before the Alloy DaemonSet starts. Gated on observability_enabled (no Alloy -> no need).
+    # Persistent journald: make K3s logs persistent (/var/log/journal) for Alloy to tail.
     - name: Create journald drop-in directory
       ansible.builtin.file:
         path: /etc/systemd/journald.conf.d
         state: directory
         mode: "0755"
       become: true
-      when: observability_enabled | bool
 
     - name: Ensure persistent journald config (Alloy tails /var/log/journal)
       ansible.builtin.copy:
@@ -175,21 +71,15 @@
         mode: "0644"
       become: true
       register: journald_conf
-      when: observability_enabled | bool
 
     - name: Restart journald + flush runtime -> persistent
       ansible.builtin.shell: systemctl restart systemd-journald && journalctl --flush
       become: true
       changed_when: false
-      when:
-        - observability_enabled | bool
-        - journald_conf.changed | default(false)
+      when: journald_conf.changed | default(false)
 
-    # kube-apiserver audit logging: drop the audit policy + log dir on each control-plane node BEFORE the
-    # k3s role restarts the apiserver with --audit-policy-file (the kube-apiserver-arg is in k3s_server).
-    # Gated on audit_enabled. Workers (k3s_control_node=false) are skipped — the apiserver runs on servers
-    # only. Restart safety: run the playbook with --forks 1 so the role restarts servers one at a time and
-    # etcd keeps quorum (2 alive of 3 while one restarts). Policy is security-focused + low-volume.
+    # kube-apiserver audit logging: deploy policy before k3s restarts.
+    # Run playbook with --forks 1 to keep etcd quorum during restarts.
     - name: Ensure audit directories (policy + log) on control planes
       ansible.builtin.file:
         path: "{{ item }}"
@@ -212,59 +102,45 @@
           omitStages:
             - RequestReceived
           rules:
-            # Skip routine reads by control-plane components (scheduler/cm/apiserver watch loops).
             - level: None
               users: ["system:apiserver", "system:kube-scheduler", "system:kube-controller-manager"]
               verbs: ["get", "list", "watch"]
-            # Skip all reads by kubelets (system:nodes) — cuts the bulk of pod/secret-mount noise.
             - level: None
               userGroups: ["system:nodes"]
               verbs: ["get", "list", "watch"]
-            # Skip kubelet pod/node status updates (high-volume, low forensic value).
             - level: None
               userGroups: ["system:nodes"]
               verbs: ["update", "patch"]
               resources:
                 - group: ""
                   resources: ["pods", "pods/status", "nodes", "nodes/status"]
-            # Skip leader-election lease renewals (the dominant write-volume noise).
             - level: None
               resources:
                 - group: "coordination.k8s.io"
                   resources: ["leases"]
-            # Skip authn/authz webhook checks (subjectaccessreviews / tokenreviews).
             - level: None
               resources:
                 - group: "authorization.k8s.io"
                   resources: ["subjectaccessreviews", "tokenreviews"]
                 - group: "authentication.k8s.io"
                   resources: ["tokenreviews"]
-            # Skip Events (both API groups — core/v1 and events.k8s.io).
             - level: None
               resources:
                 - group: "events.k8s.io"
                   resources: ["events"]
                 - group: ""
                   resources: ["events"]
-            # Log who reads secrets (non-node actors) — Metadata only: NO secret body in the log.
             - level: Metadata
               resources:
                 - group: ""
                   resources: ["secrets"]
               verbs: ["get", "list", "watch"]
-            # Log every real cluster mutation (create/update/patch/delete) at Metadata.
             - level: Metadata
               verbs: ["create", "update", "patch", "delete", "deletecollection"]
-            # Log who opens a shell / port-forward into a pod. The audit verb for these Connecter
-            # subresources maps to "get" in K8s 1.36 — NOT create/connect — so the write rule above does
-            # NOT catch them. Scope by resource with NO verb filter (version-proof). Caveat: at Metadata
-            # level the exec COMMAND args are in requestURI (k8s issue #97795) — forensically useful (you
-            # see what was run) but a secret passed on the exec cmdline would leak into the log too.
             - level: Metadata
               resources:
                 - group: ""
                   resources: ["pods/exec", "pods/attach", "pods/portforward"]
-            # Default: don't log reads of non-sensitive resources.
             - level: None
         mode: "0644"
       become: true
@@ -333,10 +209,8 @@
         - inventory_hostname == (groups['k3s_cluster'] | first)
       changed_when: false
 
-    # ------------------------------------------------------------
-    # Post-deploy verification (ensure auto-deploy resources actually rolled out)
-    # ------------------------------------------------------------
-    - name: Verify Traefik DaemonSet is rolled out
+        # Post-deploy verification (ensure auto-deploy resources actually rolled out)
+        - name: Verify Traefik DaemonSet is rolled out
       ansible.builtin.command:
         argv:
           - /usr/local/bin/k3s
@@ -372,311 +246,13 @@
       until: verify_metallb.rc == 0
       when: inventory_hostname == (groups['k3s_cluster'] | first)
 
-    - name: Verify ceph-csi-operator is rolled out
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - rollout
-          - status
-          - deployment/ceph-csi-operator-controller-manager
-          - -n
-          - ceph-csi-operator-system
-          - --timeout=60s
-      changed_when: false
-      register: verify_ceph_operator
-      retries: 20
-      delay: 5
-      until: verify_ceph_operator.rc == 0
-      when: inventory_hostname == (groups['k3s_cluster'] | first)
 
-    - name: Verify CSI snapshot-controller is rolled out
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - rollout
-          - status
-          - deployment/snapshot-controller
-          - -n
-          - kube-system
-          - --timeout=60s
-      changed_when: false
-      register: verify_snapshot_controller
-      retries: 20
-      delay: 5
-      until: verify_snapshot_controller.rc == 0
-      when: inventory_hostname == (groups['k3s_cluster'] | first)
 
-    - name: Verify cert-manager deployments are available
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - wait
-          - --for=condition=Available
-          - deployment
-          - -n
-          - cert-manager
-          - --all
-          - --timeout=120s
-      changed_when: false
-      register: verify_certmanager
-      retries: 20
-      delay: 5
-      until: verify_certmanager.rc == 0
-      when:
-        - inventory_hostname == (groups['k3s_cluster'] | first)
-        - certmanager_enabled | bool
 
-    - name: Verify NFS CSI controller is rolled out
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - rollout
-          - status
-          - deployment/csi-nfs-controller
-          - -n
-          - kube-system
-          - --timeout=60s
-      changed_when: false
-      register: verify_nfs
-      retries: 20
-      delay: 5
-      until: verify_nfs.rc == 0
-      when:
-        - inventory_hostname == (groups['k3s_cluster'] | first)
-        - nfs_enabled | bool
 
-    - name: Verify SMB CSI controller is rolled out
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - rollout
-          - status
-          - deployment/csi-smb-controller
-          - -n
-          - kube-system
-          - --timeout=60s
-      changed_when: false
-      register: verify_smb
-      retries: 20
-      delay: 5
-      until: verify_smb.rc == 0
-      when:
-        - inventory_hostname == (groups['k3s_cluster'] | first)
-        - smb_enabled | bool
 
-    # ------------------------------------------------------------
-    # Observability verification
-    # ------------------------------------------------------------
-    - name: Verify Prometheus is rolled out
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - rollout
-          - status
-          - statefulset/prometheus-kube-prometheus-stack-prometheus
-          - -n
-          - monitoring
-          - --timeout=60s
-      changed_when: false
-      register: verify_prometheus
-      retries: 20
-      delay: 5
-      until: verify_prometheus.rc == 0
-      when:
-        - inventory_hostname == (groups['k3s_cluster'] | first)
-        - observability_enabled | bool
-
-    - name: Verify Grafana is rolled out
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - rollout
-          - status
-          - deployment/kube-prometheus-stack-grafana
-          - -n
-          - monitoring
-          - --timeout=60s
-      changed_when: false
-      register: verify_grafana
-      retries: 20
-      delay: 5
-      until: verify_grafana.rc == 0
-      when:
-        - inventory_hostname == (groups['k3s_cluster'] | first)
-        - observability_enabled | bool
-
-    - name: Verify Alertmanager is rolled out
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - rollout
-          - status
-          - statefulset/alertmanager-kube-prometheus-stack-alertmanager
-          - -n
-          - monitoring
-          - --timeout=60s
-      changed_when: false
-      register: verify_alertmanager
-      retries: 20
-      delay: 5
-      until: verify_alertmanager.rc == 0
-      when:
-        - inventory_hostname == (groups['k3s_cluster'] | first)
-        - observability_enabled | bool
-
-    - name: Verify kube-state-metrics is rolled out
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - rollout
-          - status
-          - deployment/kube-prometheus-stack-kube-state-metrics
-          - -n
-          - monitoring
-          - --timeout=60s
-      changed_when: false
-      register: verify_kube_state_metrics
-      retries: 20
-      delay: 5
-      until: verify_kube_state_metrics.rc == 0
-      when:
-        - inventory_hostname == (groups['k3s_cluster'] | first)
-        - observability_enabled | bool
-
-    - name: Verify node-exporter DaemonSet is rolled out
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - rollout
-          - status
-          - daemonset/prometheus-node-exporter
-          - -n
-          - observability-host
-          - --timeout=60s
-      changed_when: false
-      register: verify_node_exporter
-      retries: 20
-      delay: 5
-      until: verify_node_exporter.rc == 0
-      when:
-        - inventory_hostname == (groups['k3s_cluster'] | first)
-        - observability_enabled | bool
-
-    - name: Verify Loki is rolled out
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - rollout
-          - status
-          - statefulset/loki
-          - -n
-          - monitoring
-          - --timeout=60s
-      changed_when: false
-      register: verify_loki
-      retries: 20
-      delay: 5
-      until: verify_loki.rc == 0
-      when:
-        - inventory_hostname == (groups['k3s_cluster'] | first)
-        - observability_enabled | bool
-
-    - name: Verify Alloy DaemonSet is rolled out
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - rollout
-          - status
-          - daemonset/alloy
-          - -n
-          - observability-host
-          - --timeout=60s
-      changed_when: false
-      register: verify_alloy
-      retries: 20
-      delay: 5
-      until: verify_alloy.rc == 0
-      when:
-        - inventory_hostname == (groups['k3s_cluster'] | first)
-        - observability_enabled | bool
-
-    - name: Verify volume snapshot CronJobs exist
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - get
-          - cronjob
-          - "{{ item.name }}-snapshotter"
-          - -n
-          - "{{ item.namespace }}"
-      changed_when: false
-      register: verify_volume_snapshots
-      loop: "{{ volume_snapshots | default([]) }}"
-      retries: 20
-      delay: 5
-      until: verify_volume_snapshots.rc == 0
-      when:
-        - inventory_hostname == (groups['k3s_cluster'] | first)
-        - (volume_snapshots | default([]) | length > 0)
-
-    - name: Verify Kured DaemonSet is rolled out
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - rollout
-          - status
-          - daemonset/kured
-          - -n
-          - kube-system
-          - --timeout=60s
-      changed_when: false
-      register: verify_kured
-      retries: 20
-      delay: 5
-      until: verify_kured.rc == 0
-      when:
-        - inventory_hostname == (groups['k3s_cluster'] | first)
-        - kured_enabled | bool
-
-    - name: Verify ExternalDNS Deployments are rolled out (one per DNS cred)
-      ansible.builtin.command:
-        argv:
-          - /usr/local/bin/k3s
-          - kubectl
-          - rollout
-          - status
-          - deployment/externaldns-{{ item.name }}
-          - -n
-          - external-dns
-          - --timeout=120s
-      changed_when: false
-      register: verify_externaldns
-      loop: "{{ certmanager_dns_credentials | default([]) }}"
-      retries: 20
-      delay: 5
-      until: verify_externaldns.rc == 0
-      when:
-        - inventory_hostname == (groups['k3s_cluster'] | first)
-        - externaldns_enabled | bool
-
-    # ------------------------------------------------------------
-    # Kubeconfig for ansible_user
-    # ------------------------------------------------------------
-    - name: Check if k3s kubeconfig exists on node
+        # Kubeconfig for ansible_user
+        - name: Check if k3s kubeconfig exists on node
       ansible.builtin.stat:
         path: /etc/rancher/k3s/k3s.yaml
       register: k3s_kubeconfig
@@ -699,3 +275,5 @@
         group: "{{ ansible_user }}"
         mode: '0600'
       when: k3s_kubeconfig.stat.exists
+
+

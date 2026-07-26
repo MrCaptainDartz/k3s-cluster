@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: cert-manager
+
+helmCharts:
+  - name: cert-manager
+    repo: https://charts.jetstack.io
+    version: v1.21.0
+    releaseName: cert-manager
+    namespace: cert-manager
+    includeCRDs: true
+    valuesFile: values.yaml
+#  - name: cert-manager-webhook-ovh
+#    repo: https://aureq.github.io/cert-manager-webhook-ovh
+#    version: 0.9.14
+#    releaseName: cert-manager-webhook-ovh
+#    namespace: cert-manager
+#    valuesInline:
+#      groupName: acme.myhomelab.example
+#      certManager:
+#        namespace: cert-manager
+#        serviceAccountName: cert-manager
+
+resources:
+  - https://github.com/Infomaniak/cert-manager-webhook-infomaniak/releases/download/v0.3.1/rendered-manifest.yaml
+  - dns-credentials-infomaniak.sops.yaml
+  - cluster-issuers.yaml
+  - network-policies.yaml

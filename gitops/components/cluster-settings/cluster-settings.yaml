@@ -1,0 +1,10 @@
+# Cluster-wide (NON-SECRET) values for Kustomize $(VAR) substitution.
+# This is the SINGLE place to configure the Git source (repoURL / branch). No secrets here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-settings
+data:
+  # Git repository ArgoCD syncs (must be reachable with the deploy key configured via Ansible).
+  repoURL: git@github.com:MrCaptainDartz/k3s-cluster.git
+  targetRevision: main

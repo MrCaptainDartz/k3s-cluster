@@ -1,0 +1,7 @@
+# Shared Kustomize varReference: declares which CRD fields may contain $(VAR) tokens to substitute.
+# Referenced by gitops/bootstrap/apps/kustomization.yaml and the infrastructure kustomizations.
+varReference:
+  - path: spec/source/repoURL
+    kind: Application
+  - path: spec/source/targetRevision
+    kind: Application
