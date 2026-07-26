@@ -130,6 +130,19 @@
             + (kured_enabled | bool | ternary(kured_manifest_templates, []))
           }}
 
+    # ExternalDNS (one instance per DNS cred in certmanager_dns_credentials). Only when enabled AND at
+    # least one DNS cred exists (the 27- template loops certmanager_dns_credentials to build per-cred
+    # Secret + HelmChart CR; 28- is the namespace NetworkPolicy).
+    - name: Append optional ExternalDNS manifests when enabled
+      ansible.builtin.set_fact:
+        k3s_server_manifests_templates: >-
+          {{
+            k3s_server_manifests_templates
+            + (((externaldns_enabled | bool) and
+                ((certmanager_dns_credentials | default([])) | length > 0))
+               | ternary(externaldns_manifest_templates, []))
+          }}
+
     # CoreDNS PDB
     - name: Append CoreDNS PodDisruptionBudget
       ansible.builtin.set_fact:
@@ -638,6 +651,27 @@
       when:
         - inventory_hostname == (groups['k3s_cluster'] | first)
         - kured_enabled | bool
+
+    - name: Verify ExternalDNS Deployments are rolled out (one per DNS cred)
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/externaldns-{{ item.name }}
+          - -n
+          - external-dns
+          - --timeout=120s
+      changed_when: false
+      register: verify_externaldns
+      loop: "{{ certmanager_dns_credentials | default([]) }}"
+      retries: 20
+      delay: 5
+      until: verify_externaldns.rc == 0
+      when:
+        - inventory_hostname == (groups['k3s_cluster'] | first)
+        - externaldns_enabled | bool
 
     # ------------------------------------------------------------
     # Kubeconfig for ansible_user

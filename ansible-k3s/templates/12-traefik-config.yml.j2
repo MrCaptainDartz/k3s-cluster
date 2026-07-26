@@ -11,6 +11,10 @@ spec:
   valuesContent: |-
     deployment:
       kind: DaemonSet
+    providers:
+      kubernetesIngress:
+        publishedService:
+          enabled: true
     tolerations:
       - key: "node-role.kubernetes.io/control-plane"
         operator: "Exists"

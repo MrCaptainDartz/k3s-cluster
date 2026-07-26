@@ -38,6 +38,8 @@ ansible-k3s/
     ├── 24-certmanager-issuers.yml.j2     # Let's Encrypt ClusterIssuers, multi-provider DNS-01 (only if certmanager_enabled)
     ├── 25-certmanager-network-policies.yml.j2 # cert-manager namespace deny-all + explicit allows (only if certmanager_enabled)
     ├── 26-certmanager-webhook-secret-reader.yml.j2 # Role+RoleBinding letting OVH/Infomaniak webhooks read their cred Secrets (only if certmanager_enabled)
+    ├── 27-externaldns.yml.j2             # ExternalDNS: per-cred Secret + HelmChart CR (Infomaniak webhook / OVH / Cloudflare), only if externaldns_enabled
+    ├── 28-externaldns-network-policies.yml.j2 # external-dns namespace deny-all + egress (kube-api, DNS, provider :443), only if externaldns_enabled
     ├── 34-nfs-storageclasses.yml.j2       # NFS CSI StorageClasses, one per nfs_shares entry (only if nfs_enabled)
     ├── 44-smb-storageclasses.yml.j2       # SMB CSI StorageClasses, one per smb_shares entry (only if smb_enabled)
     ├── 50-ceph-secrets.yml.j2            # Ceph client key Secret (always-on, group 50-59)
@@ -60,13 +62,16 @@ ansible-k3s/
 > | ------- | --------- | ------ |
 > | `01-13` | baseline (kube-vip, MetalLB, network policies, Traefik, Pod Security) | templates + URLs |
 > | `20-26` | cert-manager (cert-manager + Infomaniak/OVH webhooks + DNS secrets/issuers/NPs) | URLs 20-21 + templates 22-26 |
+> | `27-28` | ExternalDNS (one instance per DNS cred: Secret + HelmChart CR + namespace NetworkPolicy, opt-in) | templates 27-28 |
 > | `30-34` | NFS CSI (RBAC/driverinfo/controller/node + StorageClasses) | URLs 30-33 + template 34 |
 > | `40-44` | SMB CSI (RBAC/driver/controller/node + StorageClasses) | URLs 40-43 + template 44 |
 > | `50-59` | Ceph CSI + CSI external-snapshotter (Ceph secrets/StorageClasses/operator/config/NP, VolumeSnapshot CRDs, snapshot-controller, Ceph VolumeSnapshotClasses) | URLs 52-54,57-58 + templates 50,51,55,56,59 |
 > | `60-65` | Observability (kube-prometheus-stack + Loki + Alloy + node-exporter, all HelmChart CRs) | templates 60-65 |
 > | `66` | Volume snapshot CronJobs (per-application PVC snapshots, opt-in) | template 66 |
+> | `67` | Kured (automated node reboot daemon, opt-in) | template 67 |
+> | `68` | CoreDNS PodDisruptionBudget | template 68 |
 >
-> Within each range the driver/CRDs precede the StorageClasses/policies that depend on them. cert-manager sits right after the baseline; the three CSI drivers (NFS/SMB/Ceph) are grouped together after it; observability is last; the volume-snapshot CronJobs (66) are opt-in per application. Ceph is the always-on primary storage (no `*_enabled` flag); NFS/SMB/cert-manager/observability are opt-in; volume snapshots are opt-in by populating the `volume_snapshots` list.
+> Within each range the driver/CRDs precede the StorageClasses/policies that depend on them. cert-manager sits right after the baseline; ExternalDNS (27-28) right after cert-manager (it reuses the same DNS creds); the three CSI drivers (NFS/SMB/Ceph) are grouped together after it; observability is last; the volume-snapshot CronJobs (66) are opt-in per application. Ceph is the always-on primary storage (no `*_enabled` flag); NFS/SMB/cert-manager/ExternalDNS/observability/Kured are opt-in; volume snapshots are opt-in by populating the `volume_snapshots` list.
 
 ## Quick start
 
@@ -201,6 +206,11 @@ Here are some important variables based on the provided examples:
 | `certmanager_acme_servers` | `[staging, prod]`                 | ACME endpoints → one `ClusterIssuer` each (staging = tests, prod = real). |
 | `certmanager_dns_credentials` | `[…]`                            | Per-provider DNS creds (Cloudflare/OVH/Infomaniak), each routed by `match_domains`; tokens are **vault-protected**. See `all.yml.example`. |
 | `certmanager_webhook_group_ovh` | `acme.myhomelab.example`        | OVH webhook `groupName` (must match the issuer); unique to you. |
+| `externaldns_enabled` | `false`                               | Deploy ExternalDNS — auto-sync DNS A records from `Ingress`/`Service` to the DNS provider(s) in `certmanager_dns_credentials`. One instance per cred. See [ExternalDNS](#externaldns-optional). |
+| `externaldns_chart_version` / `_image_tag` / `_webhook_image_tag` | `1.20.1` / `v0.20.0` / `v0.1.0` | Official `external-dns` chart (must support `provider.webhook`, ≥ 1.15) + external-dns image + the Infomaniak webhook sidecar image. |
+| `externaldns_policy` | `sync`                                | `sync` (delete records it owns when the source goes away — safe via TXT ownership) or `upsert-only` (never delete; stale records accumulate). |
+| `externaldns_dry_run` | `true`                               | Dry-run first: ExternalDNS logs the records it **would** create without touching the provider. Flip to `false` after verifying the logs. |
+| `externaldns_sources` | `[ingress, service]`                  | Sources watched. `ingress` → hostnames from `Ingress.spec.rules[].host`; `service` → `external-dns.alpha.kubernetes.io/hostname` annotation on LoadBalancer Services. |
 | `cephfs_subvolumegroup` | `csi`                                | The CephFS subvolume group used by the CephFS driver (must exist in Ceph). |
 | `ceph_sc_rbd_name`    | `proxmox-rbd`                          | RBD StorageClass, cluster **default** (`reclaimPolicy: Retain` — storage NOT freed on PVC delete; reclaim manually. Explicit, no silent leak. Snapshots cover accidental deletion). |
 | `ceph_sc_rbd_delete_name` | `proxmox-rbd-delete`              | RBD StorageClass, **opt-in** (`reclaimPolicy: Delete` — auto-free Ceph image) for genuinely ephemeral, unsnapshotted data (scratch, caches). With snapshots the image is only trashed until removed. |
@@ -999,6 +1009,67 @@ spec:
 ```
 
 `hosts` can be the apex, a wildcard (`*.example.tld`), or any concrete subdomain of a `match_domains` zone — all are solved by the `dnsZones` selector. A common pattern is one wildcard cert reused across subdomains. Renewal is automatic (~30 days before expiry). The `cert-manager` namespace is locked down (deny-all both ways + explicit allows; no other namespace is touched).
+
+### ExternalDNS — optional
+
+Off by default (`externaldns_enabled: false`): nothing is installed. Flip the flag to deploy [ExternalDNS](https://kubernetes-sigs.github.io/external-dns/), which **auto-creates the DNS A records** for your exposed apps — so you no longer hand-create `grafana.captaindartz.org` etc. at the DNS provider. It watches `Ingress`/`Service` resources and syncs the records into the DNS provider, pointing at the **Traefik LoadBalancer IP** (`traefik_lb_ip`) automatically (Traefik publishes its LB IP as the Ingress status — `12-traefik-config` sets `ingressendpoint.publishedservice=kube-system/traefik`).
+
+**One instance per DNS cred.** The `27-externaldns.yml.j2` template loops `certmanager_dns_credentials` (the **same** list cert-manager uses) and deploys one ExternalDNS instance per entry, each managing that cred's `match_domains` (`domainFilter`) with a unique `txtOwnerId`. One source of truth for DNS creds feeds both cert-manager (TLS) and ExternalDNS (records) — **no duplicated secret**. Provider mapping:
+
+| Provider | Mechanism | Creds |
+| --- | --- | --- |
+| Infomaniak | community webhook sidecar [`M0NsTeRRR/external-dns-webhook-infomaniak`](https://github.com/M0NsTeRRR/external-dns-webhook-infomaniak) (`provider.name: webhook`) | `api-token` (reused from the cert-manager Infomaniak cred — it already has `domain:read`/`dns:read`/`dns:write` scopes) |
+| OVH | **native** ExternalDNS provider (`provider.name: ovh`) | `application_key`/`application_secret`/`consumer_key`/`endpoint` via env |
+| Cloudflare | native (`provider.name: cloudflare`) | `token` via env (`CF_API_TOKEN`) |
+
+To use OVH: add an OVH entry to `certmanager_dns_credentials` (provider `ovh`, application_key/secret/consumer_key/endpoint, match_domains) — the same entry cert-manager's OVH webhook already expects. ExternalDNS picks it up automatically (a second instance is created).
+
+**Dry-run first.** `externaldns_dry_run: true` (default) makes ExternalDNS log the records it **would** create (`Would create A record: …`) without touching the provider. Verify the logs, then flip `externaldns_dry_run: false` and re-run the playbook to actually apply.
+
+**Policy + ownership.** `policy: sync` + `registry: txt` + a stable per-cred `txtOwnerId` (`k3s-externaldns-<cred-name>`). With the TXT registry, `sync` only deletes records ExternalDNS **owns** (tracked via TXT ownership records in the zone) — manual records you created by hand are left untouched, and records for deleted apps are cleaned up automatically. The TXT ownership records (e.g. `a-grafana.captaindartz.org` TXT) are expected and required for safe `sync` deletion.
+
+**Local-only apps (no DNS entry).** ExternalDNS is **host/annotation-driven**, not automatic — it only creates a record for a resource carrying a hostname in a managed domain:
+
+- A **hostless** `Ingress` (no `spec.rules[].host`) → no record. Reach it at `http://<traefik_lb_ip>/<path>`.
+- A host **outside** the cred's `match_domains` (e.g. `app.local`, `app.cluster.local`) → ignored → no public record.
+- The annotation `external-dns.alpha.kubernetes.io/exclude: "true"` → force-skip a specific resource.
+- A `ClusterIP` `Service` (no Ingress) → not exposed → no record.
+
+**Multiple domains / providers.** One instance manages several zones as long as the same cred has access (each cred's `match_domains` is a list). Across providers, one instance per cred (Infomaniak, OVH, Cloudflare each get their own).
+
+**Namespace + NetworkPolicy.** ExternalDNS runs in a dedicated `external-dns` namespace (`enforce=baseline`, created by `13-pod-security`). `28-` locks it down: deny-all + egress to the API server (`:6443`), kube-dns (`:53`), and the provider API (`:443` to `0.0.0.0/0` — covers Infomaniak/OVH/Cloudflare). The Infomaniak webhook sidecar talks to the main external-dns container over localhost (intra-pod, not enforced).
+
+**Usage** — just create an `Ingress` with a host in a managed domain; the A record appears automatically:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-app
+  namespace: my-app
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod   # TLS too (cert-manager + ExternalDNS share the cred)
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: ["my-app.captaindartz.org"]               # in a match_domains zone -> A record auto-created
+    secretName: my-app-tls
+  rules:
+    - host: my-app.captaindartz.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: my-app, port: { number: 8080 } } }
+```
+
+Verify after enabling:
+```bash
+kubectl -n external-dns get pods                              # one external-dns-<cred> pod per cred (Infomaniak: 2 containers)
+kubectl -n external-dns logs -l app.kubernetes.io/name=external-dns --tail=50   # dry-run: "Would create A record: …"
+kubectl get networkpolicy -n external-dns                     # default-deny-all + 3 egress allows
+dig my-app.captaindartz.org @1.1.1.1                          # after dry_run=false: resolves to traefik_lb_ip
+```
 
 ### Observability — optional
 

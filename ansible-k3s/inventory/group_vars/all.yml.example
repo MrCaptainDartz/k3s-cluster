@@ -240,11 +240,11 @@ certmanager_dns_credentials:
     application_secret: "REDACTED"
     consumer_key: "REDACTED"
     match_domains: ["other.tld"]
-  - name: "infomaniak-third"
+  - name: "infomaniak-example-com"
     provider: "infomaniak"
-    secret_name: "infomaniak-api-token-third"
+    secret_name: "infomaniak-api-token-example-com"
     token: "REDACTED"
-    match_domains: ["third.tld"]
+    match_domains: ["example.com"]
 
 # OVH webhook config.
 certmanager_webhook_group_ovh: "acme.myhomelab.example"
@@ -470,6 +470,36 @@ kured_chart_repo: "https://kubereboot.github.io/charts"
 # Optional Kured manifests
 kured_manifest_templates:
   - 67-kured.yml.j2
+
+# ============================================================
+# ExternalDNS (optional) — auto-sync DNS records from Ingress/Service to the DNS provider
+# ============================================================
+# One ExternalDNS instance is deployed PER entry in certmanager_dns_credentials (so the same creds and
+# domains are shared with cert-manager). Each instance manages its cred's match_domains (domainFilter),
+# with a unique txtOwnerId. Infomaniak via the community webhook sidecar (ghcr.io/m0nsterrr/
+# external-dns-webhook-infomaniak); OVH + Cloudflare native. Creds are reused — no new secret var.
+# A records point at the Traefik LB IP (traefik_lb_ip) automatically.
+# Dry-run first: with externaldns_dry_run=true ExternalDNS logs the records it WOULD create without
+# touching the provider. Verify the logs, then flip to false to apply. policy=sync + registry=txt only
+# deletes records ExternalDNS owns (TXT ownership) — manual records in the zone are safe.
+# Local-only apps: a hostless Ingress, a host outside the cred's match_domains, or the
+# external-dns.alpha.kubernetes.io/exclude: "true" annotation -> no DNS record is created.
+# To use OVH: add an OVH entry to certmanager_dns_credentials (provider ovh, application_key/secret,
+# consumer_key, endpoint, match_domains) — the same entry cert-manager's OVH webhook already expects.
+externaldns_enabled: false
+externaldns_chart_repo: "https://kubernetes-sigs.github.io/external-dns/"
+externaldns_chart_version: "1.21.1"      # pin a chart version that supports provider.webhook (>= 1.15)
+externaldns_image_tag: "v0.21.0"         # external-dns image (registry.k8s.io/external-dns/external-dns)
+externaldns_webhook_image_tag: "v0.1.0"  # ghcr.io/m0nsterrr/external-dns-webhook-infomaniak (Infomaniak)
+externaldns_policy: "sync"               # sync (auto-clean owned records) | upsert-only (never delete)
+externaldns_dry_run: false                # flip to false after verifying the dry-run logs
+externaldns_default_targets: "ip.example.com" # Forces ExternalDNS to create CNAMEs pointing here instead of MetalLB IP
+externaldns_sources: ["ingress", "service"]
+
+# Optional ExternalDNS manifests (27- Secret+HelmChart per cred, 28- namespace NetworkPolicy).
+externaldns_manifest_templates:
+  - 27-externaldns.yml.j2
+  - 28-externaldns-network-policies.yml.j2
 
 # ------------------------------------------------------------
 # Optional volume snapshot CronJobs

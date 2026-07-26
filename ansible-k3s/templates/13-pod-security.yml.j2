@@ -41,6 +41,22 @@ metadata:
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: latest
 {% endif %}
+{% if externaldns_enabled | bool %}
+---
+# external-dns — baseline-enforced. ExternalDNS pods are plain (no hostNetwork/hostPath); one instance
+# per DNS cred (27-). Pre-created here so the HelmChart CR can target it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: external-dns
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+{% endif %}
 {% if observability_enabled | bool %}
 ---
 # monitoring — baseline-enforced (pre-created here; patched by 60-/61-).
