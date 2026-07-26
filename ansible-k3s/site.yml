@@ -242,6 +242,15 @@
             # Log every real cluster mutation (create/update/patch/delete) at Metadata.
             - level: Metadata
               verbs: ["create", "update", "patch", "delete", "deletecollection"]
+            # Log who opens a shell / port-forward into a pod. The audit verb for these Connecter
+            # subresources maps to "get" in K8s 1.36 — NOT create/connect — so the write rule above does
+            # NOT catch them. Scope by resource with NO verb filter (version-proof). Caveat: at Metadata
+            # level the exec COMMAND args are in requestURI (k8s issue #97795) — forensically useful (you
+            # see what was run) but a secret passed on the exec cmdline would leak into the log too.
+            - level: Metadata
+              resources:
+                - group: ""
+                  resources: ["pods/exec", "pods/attach", "pods/portforward"]
             # Default: don't log reads of non-sensitive resources.
             - level: None
         mode: "0644"
