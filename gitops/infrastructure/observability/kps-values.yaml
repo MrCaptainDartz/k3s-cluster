@@ -1,5 +1,5 @@
 crds:
-  enabled: false
+  enabled: true
 nodeExporter:
   enabled: false
 prometheus:
