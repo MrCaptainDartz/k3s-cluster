@@ -209,8 +209,8 @@
         - inventory_hostname == (groups['k3s_cluster'] | first)
       changed_when: false
 
-        # Post-deploy verification (ensure auto-deploy resources actually rolled out)
-        - name: Verify Traefik DaemonSet is rolled out
+    # Post-deploy verification (ensure auto-deploy resources actually rolled out)
+    - name: Verify Traefik DaemonSet is rolled out
       ansible.builtin.command:
         argv:
           - /usr/local/bin/k3s
@@ -246,13 +246,8 @@
       until: verify_metallb.rc == 0
       when: inventory_hostname == (groups['k3s_cluster'] | first)
 
-
-
-
-
-
-        # Kubeconfig for ansible_user
-        - name: Check if k3s kubeconfig exists on node
+    # Kubeconfig for ansible_user
+    - name: Check if k3s kubeconfig exists on node
       ansible.builtin.stat:
         path: /etc/rancher/k3s/k3s.yaml
       register: k3s_kubeconfig
