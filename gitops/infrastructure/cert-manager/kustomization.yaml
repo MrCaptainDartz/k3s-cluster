@@ -26,3 +26,17 @@ resources:
   - dns-credentials-infomaniak.sops.yaml
   - cluster-issuers.yaml
   - network-policies.yaml
+patches:
+  - target:
+      group: cert-manager.io
+    patch: |-
+      - op: add
+        path: /metadata/annotations/argocd.argoproj.io~1sync-wave
+        value: "2"
+  - target:
+      kind: Deployment
+      name: infomaniak-webhook
+    patch: |-
+      - op: add
+        path: /metadata/annotations/argocd.argoproj.io~1sync-wave
+        value: "1"
