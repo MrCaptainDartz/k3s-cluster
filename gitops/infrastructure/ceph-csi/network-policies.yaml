@@ -38,7 +38,7 @@ spec:
   egress:
     - to:
         - ipBlock:
-            cidr: 0.0.0.0/0
+            cidr: $(NODES_SUBNET)
       ports:
         - protocol: TCP
           port: 443
@@ -57,7 +57,7 @@ spec:
   egress:
     - to:
         - ipBlock:
-            cidr: 10.20.3.0/24
+            cidr: $(CEPH_SUBNET)
       ports:
         - protocol: TCP
           port: 3300

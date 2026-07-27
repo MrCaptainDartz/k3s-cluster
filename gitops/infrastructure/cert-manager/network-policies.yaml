@@ -38,7 +38,7 @@ spec:
   egress:
     - to:
         - ipBlock:
-            cidr: 0.0.0.0/0
+            cidr: $(NODES_SUBNET)
       ports:
         - protocol: TCP
           port: 443
@@ -80,7 +80,7 @@ spec:
   ingress:
     - from:
         - ipBlock:
-            cidr: 0.0.0.0/0
+            cidr: $(NODES_SUBNET)
       ports:
         - protocol: TCP
           port: 10250

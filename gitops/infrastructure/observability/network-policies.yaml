@@ -38,7 +38,7 @@ spec:
   egress:
     - to:
         - ipBlock:
-            cidr: 0.0.0.0/0
+            cidr: $(NODES_SUBNET)
       ports:
         - protocol: TCP
           port: 443
@@ -105,7 +105,7 @@ spec:
         - namespaceSelector: {}
     - to:
         - ipBlock:
-            cidr: 0.0.0.0/0
+            cidr: $(NODES_SUBNET)
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

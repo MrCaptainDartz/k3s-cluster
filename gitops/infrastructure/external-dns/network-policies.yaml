@@ -21,7 +21,7 @@ spec:
   egress:
     - to:
         - ipBlock:
-            cidr: 0.0.0.0/0
+            cidr: $(NODES_SUBNET)
       ports:
         - protocol: TCP
           port: 443

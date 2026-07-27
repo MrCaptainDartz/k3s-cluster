@@ -8,3 +8,5 @@ data:
   # Git repository ArgoCD syncs (must be reachable with the deploy key configured via Ansible).
   repoURL: git@github.com:MrCaptainDartz/k3s-cluster.git
   targetRevision: main
+  cephSubnet: 10.20.3.0/24
+  nodesSubnet: 10.20.4.0/24

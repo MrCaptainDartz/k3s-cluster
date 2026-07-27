@@ -5,3 +5,5 @@ varReference:
     kind: Application
   - path: spec/source/targetRevision
     kind: Application
+  - path: spec/egress/to/ipBlock/cidr
+    kind: NetworkPolicy
