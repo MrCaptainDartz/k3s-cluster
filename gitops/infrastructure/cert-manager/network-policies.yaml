@@ -123,3 +123,30 @@ spec:
           port: 443
         - protocol: TCP
           port: 80
+---
+# Prometheus scrape of cert-manager metrics (:9402). Restored from pre-gitops
+# 25-certmanager-network-policies.yml.j2 (commit 0fd1aec) — the gitops migration
+# dropped this rule, so the cert-manager ServiceMonitor target stayed Down
+# (monitoring default-deny blocked the scrape).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-prometheus
+  namespace: cert-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9402

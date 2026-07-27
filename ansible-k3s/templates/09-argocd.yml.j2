@@ -46,3 +46,59 @@ spec:
       cm:
         timeout.reconciliation: 10s
         kustomize.buildOptions: "--enable-helm"
+        # resource.exclusions: override the argo-cd chart default. The default
+        # excludes Endpoints (core "") to reduce watched events, but kube-prometheus-
+        # stack creates MANUAL Endpoints (no selector) for the k3s control-plane metrics
+        # ServiceMonitors (kubeScheduler/kubeControllerManager/kubeProxy/kubeEtcd point at
+        # the control-plane node IPs). With Endpoints excluded ArgoCD never applies them,
+        # the Services have no endpoints, and the 4 control-plane targets stay down
+        # (KubeSchedulerDown/KubeControllerManagerDown/KubeProxyDown fire). EndpointSlice
+        # (still excluded) is auto-managed by the endpoint controller; only manual
+        # Endpoints need ArgoCD to manage them. All other default exclusions preserved.
+        resource.exclusions: |
+          - apiGroups:
+              - discovery.k8s.io
+            kinds:
+              - EndpointSlice
+          - apiGroups:
+              - coordination.k8s.io
+            kinds:
+              - Lease
+          - apiGroups:
+              - authentication.k8s.io
+              - authorization.k8s.io
+            kinds:
+              - SelfSubjectReview
+              - TokenReview
+              - LocalSubjectAccessReview
+              - SelfSubjectAccessReview
+              - SelfSubjectRulesReview
+              - SubjectAccessReview
+          - apiGroups:
+              - certificates.k8s.io
+            kinds:
+              - CertificateSigningRequest
+          - apiGroups:
+              - cert-manager.io
+            kinds:
+              - CertificateRequest
+          - apiGroups:
+              - cilium.io
+            kinds:
+              - CiliumIdentity
+              - CiliumEndpoint
+              - CiliumEndpointSlice
+          - apiGroups:
+              - kyverno.io
+              - reports.kyverno.io
+              - wgpolicyk8s.io
+            kinds:
+              - PolicyReport
+              - ClusterPolicyReport
+              - EphemeralReport
+              - ClusterEphemeralReport
+              - AdmissionReport
+              - ClusterAdmissionReport
+              - BackgroundScanReport
+              - ClusterBackgroundScanReport
+              - UpdateRequest
