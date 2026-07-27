@@ -1,3 +1,11 @@
 global:
   leaderElection:
     namespace: cert-manager
+
+# Install the cert-manager CustomResourceDefinitions as part of the Helm chart.
+# Without this the chart defaults to crds.enabled=false, so ClusterIssuer/Certificate
+# resources fail to apply ("CRD not installed") and the ArgoCD Application stays
+# OutOfSync/Failed. (Kustomize's includeCRDs only covers non-templated crds/, which
+# this chart does not use — the CRDs live in templates/crd-*.yaml, gated by this value.)
+crds:
+  enabled: true
