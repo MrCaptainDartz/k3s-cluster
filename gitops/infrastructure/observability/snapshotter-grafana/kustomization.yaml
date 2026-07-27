@@ -13,6 +13,7 @@ patches:
       metadata:
         name: snapshotter
       spec:
+        schedule: "*/2 * * * *"
         jobTemplate:
           spec:
             template:
@@ -25,4 +26,4 @@ patches:
                       - name: SNAP_PVC
                         value: "kube-prometheus-stack-grafana"
                       - name: SNAP_RETENTION
-                        value: "7"
+                        value: "2"
