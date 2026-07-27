@@ -28,17 +28,45 @@ resources:
   - dns-credentials-infomaniak.sops.yaml
   - cluster-issuers.yaml
   - network-policies.yaml
+# Sync-wave ordering for the Infomaniak webhook bootstrap, which has a strict
+# dependency chain that ArgoCD must respect (each wave waits for the previous
+# one to be Healthy before applying the next):
+#   wave 0: cert-manager chart (controller, CRDs, RBAC) + SopsSecret token
+#   wave 1: cert-manager.io Issuers/Certificates (selfsign -> CA -> webhook-tls)
+#           and the Let's Encrypt ClusterIssuers (ACME account registration only
+#           needs egress to LE, not the webhook)
+#   wave 2: infomaniak-webhook Deployment + Service (mount the webhook-tls Secret)
+#   wave 3: aggregated APIService (needs live webhook endpoints to be Healthy)
+# The previous ordering (webhook Deployment wave 1, certs wave 2, APIService
+# wave 0) was inverted relative to the dependency chain and deadlocked: the
+# APIService (wave 0) could never become Healthy without the webhook pod (wave 1)
+# which itself needs the TLS Certificate (wave 2) that ArgoCD never reached.
 patches:
   - target:
       group: cert-manager.io
     patch: |-
       - op: add
         path: /metadata/annotations/argocd.argoproj.io~1sync-wave
-        value: "2"
+        value: "1"
   - target:
       kind: Deployment
       name: infomaniak-webhook
     patch: |-
       - op: add
         path: /metadata/annotations/argocd.argoproj.io~1sync-wave
-        value: "1"
+        value: "2"
+  - target:
+      kind: Service
+      name: infomaniak-webhook
+    patch: |-
+      - op: add
+        path: /metadata/annotations/argocd.argoproj.io~1sync-wave
+        value: "2"
+  - target:
+      group: apiregistration.k8s.io
+      kind: APIService
+      name: v1alpha1.acme.infomaniak.com
+    patch: |-
+      - op: add
+        path: /metadata/annotations/argocd.argoproj.io~1sync-wave
+        value: "3"
