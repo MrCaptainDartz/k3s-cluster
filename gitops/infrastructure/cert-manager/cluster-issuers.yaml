@@ -47,7 +47,7 @@ spec:
             solverName: infomaniak
             config:
               apiTokenSecretRef:
-                name: infomaniak-api-token-captaindartz-org
+                name: infomaniak-api-credentials
                 key: api-token
 ---
 apiVersion: cert-manager.io/v1
@@ -99,5 +99,5 @@ spec:
             solverName: infomaniak
             config:
               apiTokenSecretRef:
-                name: infomaniak-api-token-captaindartz-org
+                name: infomaniak-api-credentials
                 key: api-token
