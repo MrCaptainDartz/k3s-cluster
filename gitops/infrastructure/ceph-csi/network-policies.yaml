@@ -55,6 +55,8 @@ spec:
   policyTypes:
     - Egress
   egress:
+    # Ceph monitors (v2 msgr on :3300, legacy v1 on :6789) — mon discovery,
+    # auth (cephx), and fetching the OSD/MDS/crush maps.
     - to:
         - ipBlock:
             cidr: $(CEPH_SUBNET)
@@ -63,3 +65,20 @@ spec:
           port: 3300
         - protocol: TCP
           port: 6789
+    # Ceph OSDs (and MDS) bind in the 6800-7300 range (default ms_bind_port_min
+    # / ms_bind_port_max). RBD image creation and CephFS mounts must reach the
+    # OSDs to read/write objects — talking only to the mons is NOT enough.
+    # Without this rule the csi-rbdplugin/csi-cephfsplugin controller pods reach
+    # the mons (TCP :3300/:6789 open) but every OSD connection is REJECTed by the
+    # default-deny, so the Ceph client retries until the CSI gRPC deadline fires
+    # ("rpc error: code = DeadlineExceeded") and leaves an in-flight operation
+    # lock in the Ceph omap — every subsequent retry then fails with
+    # "an operation with the given Volume ID ... already exists" forever, and
+    # the PVC is stuck Pending.
+    - to:
+        - ipBlock:
+            cidr: $(CEPH_SUBNET)
+      ports:
+        - protocol: TCP
+          port: 6800
+          endPort: 7300
