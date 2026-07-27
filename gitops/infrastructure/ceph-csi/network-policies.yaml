@@ -57,7 +57,7 @@ spec:
   egress:
     - to:
         - ipBlock:
-            cidr: 192.168.1.0/24
+            cidr: 10.20.3.0/24
       ports:
         - protocol: TCP
           port: 3300
