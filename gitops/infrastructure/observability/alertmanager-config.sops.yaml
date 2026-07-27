@@ -6,7 +6,9 @@
 #
 # FILL the placeholders via:  sops edit alertmanager-config.sops.yaml
 #   bot_token: REPLACE_WITH_TELEGRAM_BOT_TOKEN  -> your Telegram bot token
-#   chat_id:   0                                -> your Telegram chat id (integer)
+#   chat_id:   123456789  (non-zero PLACEHOLDER so the prometheus-operator config
+#                          validation passes — a 0 chat_id is rejected as "missing";
+#                          the operator strictly validates the secret) -> your real chat id
 # sops re-encrypts + regenerates the MAC on save.
 apiVersion: addons.projectcapsule.dev/v1alpha1
 kind: SopsSecret
@@ -19,19 +21,19 @@ spec:
     secrets:
         - name: alertmanager-config
           stringData:
-            alertmanager.yaml: ENC[AES256_GCM,data:lWKe5oBVef2CAyoPND2Amnekvn0+KBVdc5M0obucuQm4K86YaTjaYQ+U2sH5di3/UUkvh70IEMkQAhZ/Se3CNtIkD4nV4J+4x76N+jZ38Gr1rc5rBFCSHr338ejbAzCWCvjQTpJaohm9GfsxsqB2ntbDgC3APpFKuPetjv+vR8cdPuZjzlhdZd6TsRvI0DSxDUAodGD1481AKetCx89Wyy8fMojfngWCAyhXeySkgG0drd5eFIGbk8vGjQTUZnQr37w2w0IP2HELkEkdafAZNZssutCGTDYiuydm//tP3fXDzjm8r4yxSc+y9IbeOgRENk2AVKsneHKLuXNVIrNV427up5UR5fINUebgGFEZde+FA+4fEu2gWevhW11LLW1vYgNsfMotv40flsjAegPHmf4I2fESsNfoD15vcVcKSiY2VO64xtw=,iv:z5vO6gnHX++RrhOwbsX2fQPfd6UaqKgjJOS2O06rGt8=,tag:d1r6eEhBf7Uhhl+upEV63A==,type:str]
+            alertmanager.yaml: ENC[AES256_GCM,data:c9P6soUTpwgpXTvEupE0tIcYaPW5cRvsWuL7h3jvVAnp2yINQ9BpZIQZuzgLZltt9WHKtjUhIdrr7JPnHT0fngodNZP/CRDbLCxK1esab6vBxTtfLaEdpZCggNQU/ZJ9P/KviHEjATgcghSNiA/KFBKQW9pCNyCFhGutc2ls+vRb6+0fYgs8iZIhUqI5WoQpu0erRrunxiNNFfw+QQX1U1UBWWLV4B5DUuhySPSoqQd2WjR6o/Q7z9Ztb3JboeI0lUo5XYarViLSyi67XOmbxeCuS5W5KlvM1vDk3bfpWijLdXlaa/aXwT6JLbpKy1Yemg4BvjIsLKTx4BH8zwKvGwAaQu1T/AmGtsIfmdlpFQP0gpqMtXf5lB7h5w0leanIQSbq/7U+NfggVxYCDFy5NY8tKkVS9HdFoMYCl79JOs8lpkf6SUd5yZfEcpU5/w==,iv:7fY/epHjQSptgFA8rLui3UeX7gY5Yrnp2asrX+Qc51s=,tag:sMYd9rEOhBnHIUVuLyjNFg==,type:str]
 sops:
     age:
         - enc: |
             -----BEGIN AGE ENCRYPTED FILE-----
-            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBLL1NHQUdSbDVlTXJvR1pR
-            SEtHQlI4ZVFwL000MVBxYy9LYkVsV2FBK0Y4CkUwUXRXb3pzaVJNekpXRjJtNGV4
-            Z0dDektWMW9lbC9hb1BqMGcxNGY2Wk0KLS0tIEw5RG9SdnRTV3oyb0NVa1JsdUJz
-            MkFUNFQzTFNXV3ZlbHg5dkt6RnlaSkkKn2givJ2JGcm7ipIuXfe344m9Vcrk2WoJ
-            FOjXPNhRXaxKVV5/uF2suP+TEO8b+QUYvjXNLyGBrIFVfktA2xAzuQ==
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB1eDNCU1FuWkpwTW1iTWdt
+            dmhFWnQrcTM3NGFZTTJEcXVSQ1J5eXREeUdNCklkRWtpNW9YdVg0YTVBdy93L0JS
+            RzVXb3k0QmN5d1h2YUxZbXFHN2hjZUUKLS0tIE8wUnZyTDNkUXdmbHRLWFhuLzVw
+            WkovUEova0dOcW1KbjZzMXNGcis3SjAKemf9OBF1iIomB1pB/eUxf7c2eTmLgZcK
+            hWBcyevta8GtXxJCaKF8wOfw99INe/GCujPewKjDnLlSOHkjyClcvA==
             -----END AGE ENCRYPTED FILE-----
           recipient: age12us5969kl4sn4enpyw2lmunjtn4k82srcv952fta8950tyuj4fmql74ayn
     encrypted_regex: ^(data|stringData)$
-    lastmodified: "2026-07-27T18:06:37Z"
-    mac: ENC[AES256_GCM,data:ga71lP1Jdy7QyUBmciZ5pSMy72Qb1CpQq8lPErQeQkwA9liryhfTdkYnlbnb5RQGPk17JzlMpEy8pzUfcWybYY+H/KilSZeq2FoX8gAzZHeF7gNa74Wl7eVsY/E1nAwqg0ouehBEcf6ZRUx9zm3D9IcmUBzO7abQgnzmYoW05Kc=,iv:09gKS/6A29iAVPI26A/WLWevQljo8aqtV0L0DVKhQOs=,tag:gKzypwlW6Jpubr3Bif4vYw==,type:str]
+    lastmodified: "2026-07-27T18:46:54Z"
+    mac: ENC[AES256_GCM,data:m44HiI6VdF6STzu+8/KC06Gi/fnMR+dybSTJTfQNXlJ/pmC/JzMdj3pIKXYKAX41v/u7D3ACVUNyUU9O7vg/BNwwjJwi2uDdSpfVZGiu9ICTV3vq/aWipoBCxIxo1FD0BGSxtPyRdv8+watOSgNepSeOvnpgZU0jAMZyH2DQPkg=,iv:KYkZsFEGVieK+dtSaH2s1xt0Vsr86o3PhcL3ffKaP4U=,tag:A2xOw0UrLXh/dA5amDJ54Q==,type:str]
     version: 3.13.3
