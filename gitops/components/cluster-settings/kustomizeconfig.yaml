@@ -7,3 +7,5 @@ varReference:
     kind: Application
   - path: spec/egress/to/ipBlock/cidr
     kind: NetworkPolicy
+  - path: spec/ingress/from/ipBlock/cidr
+    kind: NetworkPolicy
