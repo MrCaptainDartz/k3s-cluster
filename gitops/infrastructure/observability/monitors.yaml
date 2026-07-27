@@ -1,0 +1,291 @@
+# ServiceMonitors/PodMonitors + MetalLB v0.16 metrics-reader RBAC + a platform
+# PrometheusRule in `monitoring`. Nil selectors on the Prometheus spec (set in
+# kps-values via serviceMonitorSelectorNilUsesHelmValues: false etc.) discover
+# these cross-namespace. Targets = components kube-prometheus-stack does NOT cover.
+#
+# Ported from the pre-gitops ansible template 65-observability-rules.yml.j2
+# (commit 0fd1aec) — Jinja vars resolved to literals (monitoring / observability-host /
+# 30s), the {% if certmanager_enabled %} guard dropped (cert-manager is always on in
+# this gitops cluster), and the {% raw %} wrapper removed (the Go-templated alert
+# annotations {{ $labels.* }} are literal YAML that kustomize does not touch).
+# The node-exporter ServiceMonitor from 65- is intentionally OMITTED here: the
+# prometheus-node-exporter chart ships its own ServiceMonitor that already scrapes
+# the observability-host DS.
+---
+# kube-vip (kube-system hostNetwork DaemonSet, metrics :2112, no Service -> PodMonitor).
+# PodMonitor can only scrape a DECLARED containerPort — the "metrics":2112 containerPort
+# is declared by the kube-vip DS manifest (02-).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: kube-vip
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - kube-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-vip-ds
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s
+---
+# Traefik (kube-system). Metrics entrypoint (:9100) exposed on the LB Service by the
+# Traefik HelmChartConfig (ports.metrics.expose), so a ServiceMonitor on port "metrics"
+# resolves.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: traefik
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - kube-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: traefik
+  endpoints:
+    - port: metrics
+      interval: 30s
+---
+# cert-manager (:9402). cert-manager is always deployed in this gitops cluster.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cert-manager
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - cert-manager
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+  endpoints:
+    - port: http-metrics
+      interval: 30s
+---
+# MetalLB metrics-reader: the v0.16 controller removed kube-rbac-proxy, so :9120
+# (port "metricshttps") serves /metrics over HTTPS (self-signed webhook cert) +
+# bearer-token auth (TokenReview/SAR). Scrape needs BOTH tlsConfig.insecureSkipVerify
+# (cert NOT valid for pod IP; MUST sit under tlsConfig — a bare endpoint field is
+# silently dropped) AND a bearer token. This declares the reader SA + token Secret +
+# ClusterRole; the monitoring NetworkPolicy must allow :9120.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: metallb-metrics-reader
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: metallb
+    app.kubernetes.io/component: metrics-reader
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: metallb-metrics-token
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: metallb
+    app.kubernetes.io/component: metrics-reader
+  annotations:
+    kubernetes.io/service-account.name: metallb-metrics-reader
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: metallb-metrics-reader
+  labels:
+    app.kubernetes.io/name: metallb
+    app.kubernetes.io/component: metrics-reader
+rules:
+  - nonResourceURLs:
+      - /metrics
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metallb-metrics-reader
+  labels:
+    app.kubernetes.io/name: metallb
+    app.kubernetes.io/component: metrics-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: metallb-metrics-reader
+subjects:
+  - kind: ServiceAccount
+    name: metallb-metrics-reader
+    namespace: monitoring
+---
+# MetalLB v0.16 authreviews (controller+speaker): the k3s metallb auto-deployed
+# manifest ships STALE pre-v0.16 RBAC lacking `create` on tokenreviews/
+# subjectaccessreviews -> v0.16.1 fails the TokenReview (403) -> HTTP 500 to the
+# scraper. Supplement here: ClusterRole+Binding binds BOTH SAs. Mirrors upstream
+# chart rbac.yaml.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: metallb-authreviews
+  labels:
+    app.kubernetes.io/name: metallb
+    app.kubernetes.io/component: metrics-reader
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metallb-authreviews
+  labels:
+    app.kubernetes.io/name: metallb
+    app.kubernetes.io/component: metrics-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: metallb-authreviews
+subjects:
+  - kind: ServiceAccount
+    name: controller
+    namespace: metallb-system
+  - kind: ServiceAccount
+    name: speaker
+    namespace: metallb-system
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: metallb-controller
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - metallb-system
+  selector:
+    matchLabels:
+      app: metallb
+      component: controller
+  podMetricsEndpoints:
+    - port: metricshttps
+      scheme: https
+      tlsConfig:
+        insecureSkipVerify: true
+      authorization:
+        credentials:
+          name: metallb-metrics-token
+          key: token
+      interval: 30s
+---
+# MetalLB speaker (metallb-system hostNetwork DaemonSet, L2 adv): per-node ARP/ND
+# state — the data the LB entry path depends on. Same v0.16 gauntlet as controller
+# (port "metricshttps":9120, HTTPS+bearer) — REUSES the metallb-metrics-token Secret +
+# metrics-reader ClusterRole above (one token serves both). hostNetwork -> PodMonitor
+# scrapes pod IP directly (like kube-vip).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: metallb-speaker
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - metallb-system
+  selector:
+    matchLabels:
+      app: metallb
+      component: speaker
+  podMetricsEndpoints:
+    - port: metricshttps
+      scheme: https
+      tlsConfig:
+        insecureSkipVerify: true
+      authorization:
+        credentials:
+          name: metallb-metrics-token
+          key: token
+      interval: 30s
+---
+# ceph-csi-operator (ceph-csi-operator-system). Selector label is
+# control-plane=ceph-csi-op-controller-manager (NOT app.kubernetes.io/name).
+# Gotcha: operator + driver pods declare NO containerPort / bind no metrics endpoint
+# -> 0/0 until given a metrics --bind-address + declared containerPort (component-
+# level, out of scope). Left configured so it comes up the moment metrics are on.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: ceph-csi-operator
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - ceph-csi-operator-system
+  selector:
+    matchLabels:
+      control-plane: ceph-csi-op-controller-manager
+  podMetricsEndpoints:
+    - portNumber: 8080
+      interval: 30s
+---
+# Platform alerts. KPS ships a default ruleset; this adds cert-manager + a few
+# high-value generic ones it does NOT cover. Annotations use Go templating
+# ({{ $labels.* }}), which is literal YAML here (kustomize does not touch {{ }}).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: platform-alerts
+  namespace: monitoring
+spec:
+  groups:
+    - name: platform
+      rules:
+        - alert: CertManagerCertNotReady
+          expr: certmanager_certificate_ready_status{condition="False"} == 1
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Certificate {{ $labels.name }} not Ready in {{ $labels.namespace }}"
+            description: "cert-manager Certificate {{ $labels.name }} has been not-Ready for >10m."
+        - alert: CertManagerCertExpiringSoon
+          expr: (certmanager_certificate_expiration_timestamp_seconds - time()) < 86400 * 30
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Certificate {{ $labels.name }} expiring in <30d"
+            description: "cert-manager Certificate {{ $labels.name }} in {{ $labels.namespace }} expires in <30 days."
+        - alert: KubePersistentVolumeClaimPending
+          expr: kube_persistentvolumeclaim_status_phase{phase="Pending"} == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} Pending"
+            description: "PVC has been Pending for >5m (no StorageClass, no space, or provisioner error)."
+        - alert: PodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total[1h]) > 5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} crash-looping"
+            description: "Container {{ $labels.container }} restarted >5 times in the last hour."
+        - alert: NodeFilesystemAlmostFull
+          expr: (1 - (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"})) > 0.85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Filesystem on {{ $labels.instance }} >85% full"
+            description: "Root filesystem on node {{ $labels.instance }} is >85% used."

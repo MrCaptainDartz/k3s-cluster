@@ -1,0 +1,37 @@
+# Alertmanager configuration holding the Telegram receiver bot token + chat id.
+# Encrypted at rest with sops (age). The sops-operator decrypts this SopsSecret
+# in-cluster to materialize Secret `alertmanager-config` (key `alertmanager.yaml`),
+# which kube-prometheus-stack mounts via alertmanager.alertmanagerSpec.useExistingSecret
+# (see kps-values.yaml). This keeps the bot token out of plaintext helm values.
+#
+# FILL the placeholders via:  sops edit alertmanager-config.sops.yaml
+#   bot_token: REPLACE_WITH_TELEGRAM_BOT_TOKEN  -> your Telegram bot token
+#   chat_id:   0                                -> your Telegram chat id (integer)
+# sops re-encrypts + regenerates the MAC on save.
+apiVersion: addons.projectcapsule.dev/v1alpha1
+kind: SopsSecret
+metadata:
+    name: alertmanager-config
+    namespace: monitoring
+    annotations:
+        argocd.argoproj.io/sync-wave: "-1"
+spec:
+    secrets:
+        - name: alertmanager-config
+          stringData:
+            alertmanager.yaml: ENC[AES256_GCM,data:lWKe5oBVef2CAyoPND2Amnekvn0+KBVdc5M0obucuQm4K86YaTjaYQ+U2sH5di3/UUkvh70IEMkQAhZ/Se3CNtIkD4nV4J+4x76N+jZ38Gr1rc5rBFCSHr338ejbAzCWCvjQTpJaohm9GfsxsqB2ntbDgC3APpFKuPetjv+vR8cdPuZjzlhdZd6TsRvI0DSxDUAodGD1481AKetCx89Wyy8fMojfngWCAyhXeySkgG0drd5eFIGbk8vGjQTUZnQr37w2w0IP2HELkEkdafAZNZssutCGTDYiuydm//tP3fXDzjm8r4yxSc+y9IbeOgRENk2AVKsneHKLuXNVIrNV427up5UR5fINUebgGFEZde+FA+4fEu2gWevhW11LLW1vYgNsfMotv40flsjAegPHmf4I2fESsNfoD15vcVcKSiY2VO64xtw=,iv:z5vO6gnHX++RrhOwbsX2fQPfd6UaqKgjJOS2O06rGt8=,tag:d1r6eEhBf7Uhhl+upEV63A==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBLL1NHQUdSbDVlTXJvR1pR
+            SEtHQlI4ZVFwL000MVBxYy9LYkVsV2FBK0Y4CkUwUXRXb3pzaVJNekpXRjJtNGV4
+            Z0dDektWMW9lbC9hb1BqMGcxNGY2Wk0KLS0tIEw5RG9SdnRTV3oyb0NVa1JsdUJz
+            MkFUNFQzTFNXV3ZlbHg5dkt6RnlaSkkKn2givJ2JGcm7ipIuXfe344m9Vcrk2WoJ
+            FOjXPNhRXaxKVV5/uF2suP+TEO8b+QUYvjXNLyGBrIFVfktA2xAzuQ==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age12us5969kl4sn4enpyw2lmunjtn4k82srcv952fta8950tyuj4fmql74ayn
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-07-27T18:06:37Z"
+    mac: ENC[AES256_GCM,data:ga71lP1Jdy7QyUBmciZ5pSMy72Qb1CpQq8lPErQeQkwA9liryhfTdkYnlbnb5RQGPk17JzlMpEy8pzUfcWybYY+H/KilSZeq2FoX8gAzZHeF7gNa74Wl7eVsY/E1nAwqg0ouehBEcf6ZRUx9zm3D9IcmUBzO7abQgnzmYoW05Kc=,iv:09gKS/6A29iAVPI26A/WLWevQljo8aqtV0L0DVKhQOs=,tag:gKzypwlW6Jpubr3Bif4vYw==,type:str]
+    version: 3.13.3
