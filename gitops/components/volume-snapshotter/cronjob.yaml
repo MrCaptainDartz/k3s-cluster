@@ -22,6 +22,8 @@ spec:
               image: alpine/k8s:1.36.2
               imagePullPolicy: IfNotPresent
               env:
+                - name: TZ
+                  value: "Europe/Paris"
                 - name: SNAP_PREFIX
                   value: "app"          # PATCH THIS
                 - name: SNAP_PVC
@@ -79,16 +81,7 @@ spec:
                     | sort -r \
                     | tail -n +$((SNAP_RETENTION + 1)) \
                     | xargs -r -I{} kubectl delete volumesnapshot {} --wait=false -n "${NAMESPACE}"
-              volumeMounts:
-                - name: tz-config
-                  mountPath: /etc/localtime
-                  readOnly: true
               resources:
                 requests:
                   cpu: 25m
                   memory: 32Mi
-          volumes:
-            - name: tz-config
-              hostPath:
-                path: /etc/localtime
-                type: File
