@@ -18,7 +18,7 @@ singleBinary:
   persistence:
     enabled: true
     size: 10Gi
-    storageClass: local-path
+    storageClass: proxmox-rbd
 read:
   replicas: 0
 backend:
