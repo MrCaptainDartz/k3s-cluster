@@ -1,15 +1,111 @@
+controller:
+  type: daemonset
+  hostNetwork: false
+  volumes:
+    extra:
+      - name: machine-id
+        hostPath:
+          path: /etc/machine-id
+          type: File
+
 alloy:
+  mounts:
+    varlog: true
+    extra:
+      - name: machine-id
+        mountPath: /etc/machine-id
+        readOnly: true
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
   configMap:
+    create: true
     content: |-
-      loki.source.kubernetes "pods" {
-        targets    = discovery.kubernetes.pods.targets
-        forward_to = [loki.write.local.receiver]
+      logging {
+        level  = "info"
+        format = "logfmt"
       }
-      loki.write "local" {
-        endpoint {
-          url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+
+      local.file_match "pods" {
+        path_targets = [ { __path__ = "/var/log/pods/*/*/*.log" } ]
+      }
+      discovery.relabel "pods" {
+        targets = local.file_match.pods.targets
+        rule {
+          source_labels = ["__path__"]
+          regex         = "/var/log/pods/([^_]+)_([^_]+)_[^/]+/([^/]+)/.*"
+          target_label  = "namespace"
+          replacement   = "$1"
+          action        = "replace"
+        }
+        rule {
+          source_labels = ["__path__"]
+          regex         = "/var/log/pods/([^_]+)_([^_]+)_[^/]+/([^/]+)/.*"
+          target_label  = "pod"
+          replacement   = "$2"
+          action        = "replace"
+        }
+        rule {
+          source_labels = ["__path__"]
+          regex         = "/var/log/pods/([^_]+)_([^_]+)_[^/]+/([^/]+)/.*"
+          target_label  = "container"
+          replacement   = "$3"
+          action        = "replace"
+        }
+        rule {
+          target_label = "node"
+          replacement  = sys.env("K8S_NODE_NAME")
+          action       = "replace"
         }
       }
-      discovery.kubernetes "pods" {
-        role = "pod"
+      loki.source.file "pods" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [loki.write.loki.receiver]
+      }
+
+      discovery.relabel "journal" {
+        targets = []
+        rule {
+          source_labels = ["__journal__systemd_unit"]
+          target_label  = "unit"
+        }
+        rule {
+          target_label = "job"
+          replacement  = "journald"
+        }
+        rule {
+          target_label = "node"
+          replacement  = sys.env("K8S_NODE_NAME")
+        }
+      }
+      loki.source.journal "k3s" {
+        forward_to    = [loki.write.loki.receiver]
+        relabel_rules = discovery.relabel.journal.rules
+      }
+
+      local.file_match "audit" {
+        path_targets = [ { __path__ = "/var/log/k3s/audit.log" } ]
+      }
+      discovery.relabel "audit" {
+        targets = local.file_match.audit.targets
+        rule {
+          target_label = "job"
+          replacement  = "apiserver-audit"
+          action       = "replace"
+        }
+        rule {
+          target_label = "node"
+          replacement  = sys.env("K8S_NODE_NAME")
+          action       = "replace"
+        }
+      }
+      loki.source.file "audit" {
+        targets    = discovery.relabel.audit.output
+        forward_to = [loki.write.loki.receiver]
+      }
+
+      loki.write "loki" {
+        endpoint {
+          url = "http://loki.monitoring.svc:3100/loki/api/v1/push"
+        }
       }
