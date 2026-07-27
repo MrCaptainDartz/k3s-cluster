@@ -15,3 +15,12 @@ helmCharts:
 resources:
   - dns-credentials.sops.yaml
   - network-policies.yaml
+
+vars:
+  - name: DOMAIN_NAME
+    objRef:
+      kind: ConfigMap
+      name: cluster-settings
+      apiVersion: v1
+    fieldRef:
+      fieldPath: data.domainName

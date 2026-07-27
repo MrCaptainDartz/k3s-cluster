@@ -1,0 +1,94 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: snapshotter
+spec:
+  schedule: "0 2 * * *" # Default: 2 AM daily. Patch this per app.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: snapshotter
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: snapshotter
+          containers:
+            - name: snapshotter
+              image: alpine/k8s:1.36.2
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: SNAP_PREFIX
+                  value: "app"          # PATCH THIS
+                - name: SNAP_PVC
+                  value: "pvc-name"     # PATCH THIS
+                - name: SNAP_CLASS
+                  value: "proxmox-rbd"  # PATCH THIS (if different)
+                - name: SNAP_RETENTION
+                  value: "7"            # PATCH THIS
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -euo pipefail
+                  NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+                  export KUBECONFIG=/tmp/kc
+                  cat > "$KUBECONFIG" <<EOF
+                  apiVersion: v1
+                  kind: Config
+                  clusters:
+                  - name: local
+                    cluster:
+                      certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                      server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}
+                  contexts:
+                  - name: default
+                    context:
+                      cluster: local
+                      namespace: ${NAMESPACE}
+                      user: sa
+                  current-context: default
+                  users:
+                  - name: sa
+                    user:
+                      token: $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+                  EOF
+
+                  TS="$(date +%Y%m%d-%H%M%S)"
+                  SNAP="${SNAP_PREFIX}-${TS}"
+
+                  cat <<EOF | kubectl apply -f -
+                  apiVersion: snapshot.storage.k8s.io/v1
+                  kind: VolumeSnapshot
+                  metadata:
+                    name: "${SNAP}"
+                    namespace: "${NAMESPACE}"
+                  spec:
+                    volumeSnapshotClassName: "${SNAP_CLASS}"
+                    source:
+                      persistentVolumeClaimName: "${SNAP_PVC}"
+                  EOF
+
+                  kubectl get volumesnapshot -n "${NAMESPACE}" -o name \
+                    | { grep "/${SNAP_PREFIX}-[0-9]" || true; } \
+                    | sed 's#.*/##' \
+                    | sort -r \
+                    | tail -n +$((SNAP_RETENTION + 1)) \
+                    | xargs -r -I{} kubectl delete volumesnapshot {} --wait=false -n "${NAMESPACE}"
+              volumeMounts:
+                - name: tz-config
+                  mountPath: /etc/localtime
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 32Mi
+          volumes:
+            - name: tz-config
+              hostPath:
+                path: /etc/localtime
+                type: File

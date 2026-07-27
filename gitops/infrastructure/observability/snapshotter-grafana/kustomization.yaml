@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namePrefix: grafana-
+resources:
+  - ../../../components/volume-snapshotter
+patches:
+  - target:
+      kind: CronJob
+      name: snapshotter
+    patch: |-
+      apiVersion: batch/v1
+      kind: CronJob
+      metadata:
+        name: snapshotter
+      spec:
+        jobTemplate:
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: snapshotter
+                    env:
+                      - name: SNAP_PREFIX
+                        value: "grafana"
+                      - name: SNAP_PVC
+                        value: "kube-prometheus-stack-grafana"
+                      - name: SNAP_RETENTION
+                        value: "7"

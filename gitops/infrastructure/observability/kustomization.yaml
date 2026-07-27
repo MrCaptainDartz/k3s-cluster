@@ -37,3 +37,6 @@ resources:
   - monitors.yaml
   - network-policies.yaml
   - rules.yaml
+  - snapshotter-prometheus
+  - snapshotter-grafana
+  - snapshotter-loki

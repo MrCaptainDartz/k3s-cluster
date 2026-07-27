@@ -17,5 +17,8 @@ txtOwnerId: external-dns-infomaniak
 sources:
   - ingress
   - service
+extraArgs:
+  - --default-targets=ip.$(DOMAIN_NAME)
+  - --force-default-targets
 registry: txt
 logLevel: info
