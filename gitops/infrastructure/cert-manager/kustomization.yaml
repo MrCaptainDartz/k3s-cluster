@@ -2,8 +2,19 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 components:
   - ../../components/cluster-settings
 kind: Kustomization
-namespace: cert-manager
 
+# NOTE: no top-level `namespace:` override here. The cert-manager Helm chart sets
+# its own namespace via helmCharts.namespace below, and the Infomaniak webhook
+# upstream manifest deliberately spans three namespaces:
+#   - cert-manager-infomaniak : webhook SA / Service / Deployment (+ its Namespace)
+#   - cert-manager            : secret-reader Role/RoleBinding (reads the API token)
+#   - kube-system             : auth-reader RoleBinding for extension-apiserver-
+#                               authentication (required by the aggregated apiserver)
+# Forcing everything into cert-manager (a previous `namespace: cert-manager` here)
+# relocated the kube-system RoleBinding into cert-manager, where the referenced
+# Role does not exist, so the webhook pod could not read the extension-apiserver
+# authentication ConfigMap and CrashLooped. Keeping namespaces explicit preserves
+# the upstream design.
 helmCharts:
   - name: cert-manager
     repo: https://charts.jetstack.io
@@ -28,6 +39,7 @@ resources:
   - dns-credentials-infomaniak.sops.yaml
   - cluster-issuers.yaml
   - network-policies.yaml
+  - network-policies-infomaniak.yaml
 # Sync-wave ordering for the Infomaniak webhook bootstrap, which has a strict
 # dependency chain that ArgoCD must respect (each wave waits for the previous
 # one to be Healthy before applying the next):

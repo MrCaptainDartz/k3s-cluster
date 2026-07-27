@@ -1,0 +1,117 @@
+# Zero-trust NetworkPolicies for the Infomaniak cert-manager webhook, which the
+# upstream manifest installs in its own `cert-manager-infomaniak` namespace.
+#
+# Traffic model (aggregated API server / DNS01 solver):
+#   * Ingress from the kube-apiserver (NODES_SUBNET) on :443 — the APIService
+#     proxy. The same source/port also covers kubelet liveness/readiness probes.
+#   * Egress to the kube-apiserver (NODES_SUBNET :443/:6443) — authn/authz,
+#     watches, and reading the API-token Secret (which lives in cert-manager).
+#   * Egress to kube-dns (:53) — resolving the Infomaniak API hostname.
+#   * Egress to the Internet on :443 — calling the Infomaniak DNS API to
+#     create/delete TXT records during DNS-01 challenges.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: cert-manager-infomaniak
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: cert-manager-infomaniak
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-kubeapi
+  namespace: cert-manager-infomaniak
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: $(NODES_SUBNET)
+      ports:
+        # kube-apiserver aggregated APIService proxy + kubelet probes (:443).
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-kubeapi
+  namespace: cert-manager-infomaniak
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: $(NODES_SUBNET)
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+  namespace: cert-manager-infomaniak
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-internet
+  namespace: cert-manager-infomaniak
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        # Infomaniak DNS API (HTTPS).
+        - protocol: TCP
+          port: 443
