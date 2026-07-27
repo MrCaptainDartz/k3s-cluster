@@ -1,0 +1,60 @@
+# EXAMPLE / TEMPLATE — documentation only. NOT referenced in kustomization.yaml,
+# so ArgoCD does NOT apply it. The real secret lives in alertmanager-config.sops.yaml,
+# which is sops-encrypted — its stringData is an opaque ENC[] blob, so anyone cloning
+# the repo to deploy their own cluster cannot see what to put inside. This file shows
+# the cleartext structure.
+#
+# To create your own encrypted secret from this template:
+#   1. cp alertmanager-config.sops.yaml.example alertmanager-config.sops.yaml
+#   2. sops --encrypt --in-place alertmanager-config.sops.yaml
+#      (gitops/.sops.yaml creation rule encrypts stringData with the age recipient
+#      for any *.sops.yaml file; you need the matching age PRIVATE key to decrypt)
+#   3. sops edit alertmanager-config.sops.yaml
+#      fill the two placeholders (bot_token + chat_id), save -> re-encrypted + MAC
+#   4. ensure `- alertmanager-config.sops.yaml` is listed under kustomization.yaml
+#      resources (it already is in this repo)
+#
+# This SopsSecret (kind addons.projectcapsule.dev/v1alpha1, same CRD as the
+# cert-manager/external-dns/ceph sops secrets) materializes Secret `alertmanager-config`
+# (key alertmanager.yaml) in `monitoring`, which kube-prometheus-stack mounts via
+# alertmanager.alertmanagerSpec.useExistingSecret + configSecret (see kps-values.yaml).
+# It keeps the Telegram bot token out of plaintext helm values.
+#
+# NOTE — prometheus-operator strict validation: the operator validates this config
+# during reconcile. chat_id MUST be non-zero (0 is rejected as "missing chat_id",
+# -> PrometheusOperatorSyncFailed). The placeholder 123456789 below is non-zero so
+# the config validates; replace it with your real chat id. With route.receiver=telegram
+# the alertmanager will attempt sends to Telegram every repeat_interval (4h) once a
+# real bot_token is in place.
+#
+# How to obtain the Telegram credentials:
+#   bot_token: create a bot with @BotFather -> you get "<bot_id>:<token>"
+#   chat_id:   your numeric chat id (message @userinfobot, or for a group add the bot
+#              and read the update from the Bot API). Integer, non-zero.
+apiVersion: addons.projectcapsule.dev/v1alpha1
+kind: SopsSecret
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  secrets:
+    - name: alertmanager-config
+      stringData:
+        alertmanager.yaml: |
+          global:
+            resolve_timeout: 5m
+          route:
+            group_by: ["alertname", "namespace"]
+            group_wait: 30s
+            group_interval: 5m
+            repeat_interval: 4h
+            receiver: telegram
+          receivers:
+            - name: "null"
+            - name: telegram
+              telegram_configs:
+                - bot_token: "REPLACE_WITH_TELEGRAM_BOT_TOKEN"   # from @BotFather, format "<bot_id>:<token>"
+                  chat_id: 123456789                              # your chat id (integer, non-zero; 0 is rejected)
+                  send_resolved: true
