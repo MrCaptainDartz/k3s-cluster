@@ -3,19 +3,19 @@
 
 - name: Create Infisical application directories
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ item.path }}"
     state: directory
     owner: "{{ service_user_name }}"
     group: "{{ service_user_name }}"
-    mode: '0775'
+    mode: "{{ item.mode | default('0775') }}"
   loop:
-    - "{{ infisical_dir }}"
-    - "{{ infisical_dir }}/data"
-    - "{{ infisical_dir }}/data/postgres"
-    - "{{ infisical_dir }}/data/redis"
-    - "/home/{{ service_user_name }}/.config"
-    - "/home/{{ service_user_name }}/.config/systemd"
-    - "/home/{{ service_user_name }}/.config/systemd/user"
+    - { path: "{{ infisical_dir }}" }
+    - { path: "{{ infisical_dir }}/data" }
+    - { path: "{{ infisical_dir }}/data/postgres" }
+    - { path: "{{ infisical_dir }}/data/redis", mode: '0777' }
+    - { path: "/home/{{ service_user_name }}/.config" }
+    - { path: "/home/{{ service_user_name }}/.config/systemd" }
+    - { path: "/home/{{ service_user_name }}/.config/systemd/user" }
 
 - name: Check if existing Infisical .env file exists
   ansible.builtin.stat:
