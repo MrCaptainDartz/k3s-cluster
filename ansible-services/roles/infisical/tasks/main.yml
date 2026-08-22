@@ -11,7 +11,7 @@
   loop:
     - { path: "{{ infisical_dir }}" }
     - { path: "{{ infisical_dir }}/data" }
-    - { path: "{{ infisical_dir }}/data/postgres" }
+    - { path: "{{ infisical_dir }}/data/postgres", mode: '0777' }
     - { path: "{{ infisical_dir }}/data/redis", mode: '0777' }
     - { path: "/home/{{ service_user_name }}/.config" }
     - { path: "/home/{{ service_user_name }}/.config/systemd" }

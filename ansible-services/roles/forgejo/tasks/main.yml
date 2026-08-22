@@ -3,19 +3,19 @@
 
 - name: Create Forgejo application directories
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ item.path }}"
     state: directory
     owner: "{{ service_user_name }}"
     group: "{{ service_user_name }}"
-    mode: '0775'
+    mode: "{{ item.mode | default('0775') }}"
   loop:
-    - "{{ forgejo_dir }}"
-    - "{{ forgejo_dir }}/data"
-    - "{{ forgejo_dir }}/data/postgres"
-    - "{{ forgejo_dir }}/data/forgejo"
-    - "/home/{{ service_user_name }}/.config"
-    - "/home/{{ service_user_name }}/.config/systemd"
-    - "/home/{{ service_user_name }}/.config/systemd/user"
+    - { path: "{{ forgejo_dir }}" }
+    - { path: "{{ forgejo_dir }}/data" }
+    - { path: "{{ forgejo_dir }}/data/postgres", mode: '0777' }
+    - { path: "{{ forgejo_dir }}/data/forgejo", mode: '0777' }
+    - { path: "/home/{{ service_user_name }}/.config" }
+    - { path: "/home/{{ service_user_name }}/.config/systemd" }
+    - { path: "/home/{{ service_user_name }}/.config/systemd/user" }
 
 - name: Check if existing Forgejo .env file exists
   ansible.builtin.stat:
