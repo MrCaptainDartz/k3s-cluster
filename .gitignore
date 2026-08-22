@@ -44,6 +44,16 @@ terraform.rc
 ansible-k3s/inventory/hosts.yml
 ansible-k3s/inventory/group_vars/all.yml
 
+# Ignore Ansible Services inventory and variable files
+ansible-services/inventory/hosts.yml
+ansible-services/inventory/group_vars/all.yml
+
+# Ignore generated credentials and outputs
+output/
+ansible-services/output/
+_bmad-output/
+*.credentials*
+
 # Ignore ansible-galaxy downloaded roles (installed locally via requirements)
 ansible-k3s/roles/
 

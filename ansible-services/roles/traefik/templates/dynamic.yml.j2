@@ -1,0 +1,53 @@
+http:
+  routers:
+    # Forgejo Git Web UI
+    forgejo:
+      entryPoints:
+        - "websecure"
+      rule: "Host(`{{ traefik_forgejo_domain }}`)"
+      service: "forgejo-service"
+      middlewares:
+        - "security-headers"
+      tls: {}
+
+    # Infisical Secret Manager Web UI & API
+    infisical:
+      entryPoints:
+        - "websecure"
+      rule: "Host(`{{ traefik_infisical_domain }}`)"
+      service: "infisical-service"
+      middlewares:
+        - "security-headers"
+      tls: {}
+
+  services:
+    forgejo-service:
+      loadBalancer:
+        servers:
+          - url: "http://forgejo:3000"
+
+    infisical-service:
+      loadBalancer:
+        servers:
+          - url: "http://infisical-backend:8080"
+
+  middlewares:
+    security-headers:
+      headers:
+        browserXssFilter: true
+        contentTypeNosniff: true
+        forceSTSHeader: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 31536000
+        customFrameOptionsValue: "SAMEORIGIN"
+
+tls:
+  certificates:
+    - certFile: "/etc/traefik/certs/tls.crt"
+      keyFile: "/etc/traefik/certs/tls.key"
+  stores:
+    default:
+      defaultCertificate:
+        certFile: "/etc/traefik/certs/tls.crt"
+        keyFile: "/etc/traefik/certs/tls.key"

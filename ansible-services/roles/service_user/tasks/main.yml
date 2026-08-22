@@ -1,0 +1,121 @@
+---
+# tasks file for service_user
+
+- name: Create unprivileged service user (no sudo access)
+  ansible.builtin.user:
+    name: "{{ service_user_name }}"
+    comment: "{{ service_user_comment }}"
+    shell: /bin/bash
+    create_home: true
+    home: "{{ service_user_home }}"
+    state: present
+
+- name: Ensure service user home directory has correct ownership and permissions
+  ansible.builtin.file:
+    path: "{{ service_user_home }}"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0750'
+    state: directory
+
+- name: Create .ansible/tmp directory for service user
+  ansible.builtin.file:
+    path: "{{ service_user_home }}/.ansible/tmp"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0700'
+    state: directory
+
+- name: Ensure subordinate UID range exists for service user
+  ansible.builtin.lineinfile:
+    path: /etc/subuid
+    regexp: "^{{ service_user_name }}:"
+    line: "{{ service_user_name }}:100000:65536"
+    create: true
+    mode: '0644'
+
+- name: Ensure subordinate GID range exists for service user
+  ansible.builtin.lineinfile:
+    path: /etc/subgid
+    regexp: "^{{ service_user_name }}:"
+    line: "{{ service_user_name }}:100000:65536"
+    create: true
+    mode: '0644'
+
+- name: Check if systemd linger is already enabled for service user
+  ansible.builtin.stat:
+    path: "/var/lib/systemd/linger/{{ service_user_name }}"
+  register: service_user_linger_stat
+
+- name: Enable systemd lingering for service user
+  ansible.builtin.command:
+    cmd: "loginctl enable-linger {{ service_user_name }}"
+  when: not service_user_linger_stat.stat.exists
+  changed_when: not service_user_linger_stat.stat.exists
+
+- name: Configure .bashrc environment for service user
+  ansible.builtin.blockinfile:
+    path: "{{ service_user_home }}/.bashrc"
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - Services Environment"
+    block: |
+      # D-Bus and XDG Runtime configuration for systemd user services
+      export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+      if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+      fi
+
+      # Point Docker tools to Podman Rootless socket
+      export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+
+      # User local binaries
+      export PATH="$HOME/.local/bin:$PATH"
+    create: true
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0644'
+
+- name: Configure .bash_profile to source .bashrc for login shells
+  ansible.builtin.copy:
+    dest: "{{ service_user_home }}/.bash_profile"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0644'
+    content: |
+      # .bash_profile - Executed for login shells
+      if [ -f ~/.bashrc ]; then
+        . ~/.bashrc
+      fi
+
+- name: Create .ssh directory for service user
+  ansible.builtin.file:
+    path: "{{ service_user_home }}/.ssh"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0700'
+    state: directory
+
+- name: Check if admin authorized_keys exists
+  ansible.builtin.stat:
+    path: "/home/{{ ansible_user }}/.ssh/authorized_keys"
+  register: admin_keys_stat
+
+- name: Copy authorized_keys from admin user to service user
+  ansible.builtin.copy:
+    src: "/home/{{ ansible_user }}/.ssh/authorized_keys"
+    dest: "{{ service_user_home }}/.ssh/authorized_keys"
+    remote_src: true
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0600'
+  when: admin_keys_stat.stat.exists
+
+- name: Add custom SSH authorized keys for service user
+  ansible.builtin.lineinfile:
+    path: "{{ service_user_home }}/.ssh/authorized_keys"
+    line: "{{ item }}"
+    create: true
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0600'
+  loop: "{{ service_user_ssh_keys | default([]) }}"
+  when: service_user_ssh_keys is defined and (service_user_ssh_keys | length > 0)

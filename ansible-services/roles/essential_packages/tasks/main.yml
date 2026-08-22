@@ -1,0 +1,53 @@
+---
+- name: Update apt cache and upgrade all system packages
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: dist
+    cache_valid_time: 3600
+
+- name: Install essential system tools
+  ansible.builtin.apt:
+    name:
+      # Hypervisor integration (Proxmox VE)
+      - qemu-guest-agent
+      # Security, Certificates & Firewall
+      - ca-certificates
+      - acl
+      - ufw
+      - fail2ban
+      # Network tools & diagnostics
+      - curl
+      - wget
+      - dnsutils
+      - iputils-ping
+      - traceroute
+      - lsof
+      # Version control & Data
+      - git
+      - git-lfs
+      - jq
+      - rsync
+      - unzip
+      - zstd
+      # Editors & System tools
+      - vim
+      - nano
+      - less
+      - file
+      - htop
+      - iotop
+    state: present
+    update_cache: true
+
+- name: Ensure qemu-guest-agent service is started and enabled
+  ansible.builtin.systemd_service:
+    name: qemu-guest-agent
+    state: started
+    enabled: true
+
+- name: Install additional custom system packages
+  ansible.builtin.apt:
+    name: "{{ essential_packages_extra }}"
+    state: present
+    update_cache: true
+  when: essential_packages_extra is defined and (essential_packages_extra | length > 0)

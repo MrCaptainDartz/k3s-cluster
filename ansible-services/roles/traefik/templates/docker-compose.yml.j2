@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  traefik:
+    image: docker.io/traefik:{{ traefik_version | default('v3') }}
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "{{ traefik_http_port | default(8000) }}:80"
+      - "{{ traefik_https_port | default(8443) }}:443"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./config/traefik.yml:/etc/traefik/traefik.yml:ro,Z
+      - ./config/dynamic:/etc/traefik/dynamic:ro,Z
+      - ./certs:/etc/traefik/certs:ro,Z
+      - ./logs:/var/log/traefik:Z,U
+    logging:
+      driver: "{{ container_log_driver | default('json-file') }}"
+      options:
+        max-size: "{{ container_log_max_size | default('500m') }}"
+        max-file: "{{ container_log_max_file | default('3') }}"
+    networks:
+      - services-network
+
+networks:
+  services-network:
+    name: services-network
+    external: true

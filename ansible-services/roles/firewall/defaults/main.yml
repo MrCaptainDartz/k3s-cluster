@@ -1,0 +1,11 @@
+---
+# defaults file for firewall
+firewall_default_incoming: deny
+firewall_default_outgoing: allow
+firewall_default_routed: deny
+firewall_logging: "on"
+firewall_rules:
+  - { port: "22", proto: "tcp", rule: "limit", comment: "SSH Admin Rate Limited" }
+  - { port: "2222", proto: "tcp", rule: "allow", comment: "Forgejo Git SSH" }
+  - { port: "3000", proto: "tcp", rule: "allow", comment: "Forgejo Web UI" }
+  - { port: "8080", proto: "tcp", rule: "allow", comment: "Infisical Web / API" }

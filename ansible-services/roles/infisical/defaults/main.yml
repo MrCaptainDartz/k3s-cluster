@@ -1,0 +1,14 @@
+---
+# defaults file for infisical
+infisical_enabled: true
+infisical_dir: "/home/{{ service_user_name }}/infisical"
+infisical_version: "latest"
+infisical_port: 8080
+infisical_db_name: "infisical"
+infisical_db_user: "infisical"
+infisical_db_password: ""
+infisical_encryption_key: ""
+infisical_auth_secret: ""
+infisical_log_driver: "{{ container_log_driver | default('json-file') }}"
+infisical_log_max_size: "{{ container_log_max_size | default('500m') }}"
+infisical_log_max_file: "{{ container_log_max_file | default('3') }}"

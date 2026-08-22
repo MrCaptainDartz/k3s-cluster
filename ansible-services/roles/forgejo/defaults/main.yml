@@ -1,0 +1,14 @@
+---
+# defaults file for forgejo
+forgejo_enabled: true
+forgejo_dir: "/home/{{ service_user_name }}/forgejo"
+forgejo_version: "16.0.3"
+forgejo_http_port: 3000
+forgejo_ssh_port: 2222
+forgejo_db_name: "forgejo"
+forgejo_db_user: "forgejo"
+forgejo_db_password: ""
+forgejo_disable_registration: false
+forgejo_log_driver: "{{ container_log_driver | default('json-file') }}"
+forgejo_log_max_size: "{{ container_log_max_size | default('500m') }}"
+forgejo_log_max_file: "{{ container_log_max_file | default('3') }}"

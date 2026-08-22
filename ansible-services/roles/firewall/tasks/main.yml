@@ -1,0 +1,55 @@
+---
+- name: Install UFW
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+    update_cache: true
+
+- name: Set UFW default incoming policy
+  community.general.ufw:
+    direction: incoming
+    default: "{{ firewall_default_incoming }}"
+  notify: Reload UFW
+
+- name: Set UFW default outgoing policy
+  community.general.ufw:
+    direction: outgoing
+    default: "{{ firewall_default_outgoing }}"
+  notify: Reload UFW
+
+- name: Set UFW default routed policy
+  community.general.ufw:
+    direction: routed
+    default: "{{ firewall_default_routed }}"
+  notify: Reload UFW
+
+- name: Configure firewall port rules
+  community.general.ufw:
+    rule: "{{ item.rule | default('allow') }}"
+    port: "{{ item.port }}"
+    proto: "{{ item.proto | default('tcp') }}"
+    comment: "{{ item.comment | default(omit) }}"
+  loop: "{{ firewall_rules }}"
+  notify: Reload UFW
+
+- name: Configure UFW NAT port redirection in before.rules
+  ansible.builtin.blockinfile:
+    path: /etc/ufw/before.rules
+    insertbefore: "^\\*filter"
+    marker: "# {mark} ANSIBLE MANAGED NAT REDIRECTION"
+    block: |
+      *nat
+      :PREROUTING ACCEPT [0:0]
+      :OUTPUT ACCEPT [0:0]
+      -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port {{ traefik_http_port | default(8000) }}
+      -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port {{ traefik_https_port | default(8443) }}
+      -A OUTPUT -o lo -p tcp --dport 80 -j REDIRECT --to-port {{ traefik_http_port | default(8000) }}
+      -A OUTPUT -o lo -p tcp --dport 443 -j REDIRECT --to-port {{ traefik_https_port | default(8443) }}
+      COMMIT
+  notify: Reload UFW
+  when: traefik_enabled | default(true)
+
+- name: Enable UFW firewall with logging
+  community.general.ufw:
+    state: enabled
+    logging: "{{ firewall_logging }}"

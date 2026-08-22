@@ -1,0 +1,55 @@
+# ----------------------------------------------------------------
+# Proxmox API (Mandatory)
+# ----------------------------------------------------------------
+proxmox_api_url   = "https://10.x.x.x:8006/api2/json"
+proxmox_api_token = "root@pam!opentofu=uuid-token-here"
+proxmox_insecure  = true
+
+# ----------------------------------------------------------------
+# SSH Access (Mandatory)
+# ----------------------------------------------------------------
+ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@example.com"
+
+# ----------------------------------------------------------------
+# VM Configuration & Placement
+# ----------------------------------------------------------------
+vm_name              = "infra-services"
+node_name            = "pve-node-1"
+cluster_nodes        = ["pve-node-1", "pve-node-2", "pve-node-3"]
+vm_disk_datastore_id = "pool1_ssd"
+
+vm_cpu_cores     = 4
+vm_cpu_type      = "host"
+vm_memory_mb     = 8192
+vm_disk_size_gb  = 80
+vm_bios          = "ovmf"
+vm_machine_type  = "q35"
+vm_scsi_hardware = "virtio-scsi-single"
+vm_disk_iothread = true
+vm_boot_order    = ["scsi0"]
+vm_tags          = ["services", "gitops", "forgejo", "infisical", "opentofu"]
+pool_id          = "Backup-Daily"
+
+# Proxmox boot sequence (Position 1, 60s delay to initialize services before K3s cluster)
+vm_start_on_boot    = true
+vm_startup_order    = 1
+vm_startup_up_delay = 60
+
+# ----------------------------------------------------------------
+# Network
+# ----------------------------------------------------------------
+network_bridge  = "vmbr0"
+network_vlan_id = 2004
+ip_address      = "10.20.4.253/24"
+gateway         = "10.20.4.254"
+dns_servers     = ["10.20.4.254"]
+dns_domain      = "home.lan"
+
+# ----------------------------------------------------------------
+# Proxmox High Availability (HA)
+# ----------------------------------------------------------------
+enable_ha       = true
+ha_state        = "started"
+ha_max_restart  = 1
+ha_max_relocate = 1
+# ha_group      = null # HA group name if defined in Proxmox

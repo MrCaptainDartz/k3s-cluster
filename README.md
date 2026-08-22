@@ -2,78 +2,126 @@
 
 This repository provides a complete solution for deploying a **Hyperconverged Infrastructure (HCI)** at home on a Proxmox VE cluster.
 
-From initial VM provisioning to a highly available K3s cluster with persistent storage, this project automates the entire stack using modern Infrastructure-as-Code (IaC) principles with **OpenTofu**, **Ansible**, and **ArgoCD**.
+From core external services (local Git & Secrets management) to automated VM provisioning, high-availability K3s, and persistent Ceph storage, this project automates the entire stack using modern Infrastructure-as-Code (IaC) principles with **OpenTofu**, **Ansible**, and **ArgoCD**.
 
 ---
 
-## 🏗️ Project Vision
+## 🏗️ Architecture & Logical Layers
 
-The mission of this project is to bridge the gap between "experimental homelabbing" and "professional cloud-native infrastructure". By treating your domestic hardware like a private cloud, you achieve:
+The architecture is divided into decoupled layers to ensure maximum reliability and resolve any "chicken-and-egg" dependencies between GitOps, Secrets, and Kubernetes:
 
-1.  **Seamless Infrastructure Provisioning**: Fully automated Ubuntu VM deployment on Proxmox.
-2.  **Highly Available Kubernetes**: A resilient K3s cluster.
-3.  **Hyperconverged Storage**: Integrated **Ceph** storage providing cloud-native persistent volumes.
-4.  **GitOps Workflows**: Automatic synchronization of applications and infrastructure state via ArgoCD.
+```mermaid
+flowchart TD
+    subgraph Layer0["Layer 0: Core Infra Services (Prerequisite)"]
+        VM0["VM: infra-services (10.20.4.253)"]
+        TRF["Traefik v3 (TLS ECDSA P-384 :443 / :80 redirect)"]
+        FJ["Forgejo (Git Server + SSH :2222)"]
+        INF["Infisical (Secret Manager)"]
+        VM0 --> TRF
+        TRF -->|Internal services-network| FJ
+        TRF -->|Internal services-network| INF
+    end
 
----
+    subgraph Layer1["Layer 1: K3s Virtual Machines (OpenTofu)"]
+        HC1["Node 1: k3s-dev-hc1 (10.20.4.1)"]
+        HC2["Node 2: k3s-dev-hc2 (10.20.4.2)"]
+        HC3["Node 3: k3s-dev-hc3 (10.20.4.3)"]
+    end
 
-## 🛠️ Architecture & Workflow
+    subgraph Layer2["Layer 2: Cluster Bootstrap (Ansible)"]
+        K3S["HA K3s Control Plane + etcd"]
+        VIP["kube-vip (API VIP 10.20.4.10)"]
+        MLB["MetalLB (LoadBalancer)"]
+        ARGO["ArgoCD GitOps Controller"]
+    end
 
-The project is split into three main logical layers:
+    subgraph Layer3["Layer 3: GitOps Workflows (ArgoCD)"]
+        APPS["Cert-Manager, ExternalDNS, Ceph CSI, Observability, etc."]
+    end
 
-### Layer 1: Infrastructure (IaC)
-Located in [`iac/`](./iac/), this part uses **OpenTofu** to talk to the Proxmox API to provision VMs.
+    Layer0 -->|Git repo source & Secrets| Layer2
+    Layer1 --> Layer2
+    Layer2 --> Layer3
+    FJ -.->|Sync Git manifests| ARGO
+    INF -.->|Inject secrets| APPS
+```
 
-### Layer 2: Bootstrap (Ansible)
-Located in [`ansible-k3s/`](./ansible-k3s/), this part uses **Ansible** to bootstrap K3s, MetalLB, SOPS, and ArgoCD on the VMs.
+### Layer 0: Core Infrastructure Services (Prerequisite)
+Located in [`iac-services/`](./iac-services/) and [`ansible-services/`](./ansible-services/):
+- Provisions a dedicated standalone VM (`infra-services` at `10.20.4.253`) on Ceph storage (`pool1_ssd`) in Proxmox resource pool `Backup-Daily` with HA replication.
+- Runs **Traefik v3** (HTTPS reverse proxy with 30-year ECDSA P-384 certificate), **Forgejo** (local Git server), and **Infisical** (external secrets manager) using **Podman Rootless** under an unprivileged user without sudo rights (`services`).
+- **Security by Design**: Direct container web ports (`3000`, `8080`) are completely unmapped from the host and strictly isolated inside a private Podman network (`services-network`). UFW performs transparent local NAT redirection (`80 -> 8000`, `443 -> 8443`).
+- **Automated Bootstrap**: Forgejo admin account is automatically created and credentials saved locally to [`ansible-services/output/forgejo-credentials.txt`](./ansible-services/output/forgejo-credentials.txt). Public registrations are disabled.
+- **Production Hardened**: Infisical is hardened according to official standards (SSRF protection, JWT token lifetime reduction, Redis password authentication, and read-only container rootfs with tmpfs).
+- **Why?** Having Git and Secrets hosted outside the Kubernetes cluster solves the bootstrap dependency problem and allows disaster recovery without relying on an operational K8s cluster.
 
-### Layer 3: GitOps (ArgoCD)
-Located in [`gitops/`](./gitops/), this layer manages all Kubernetes infrastructure (Cert-Manager, ExternalDNS, Ceph CSI, Observability) via GitOps.
-The Git source (repo URL + branch) used by every ArgoCD Application is centralized in `gitops/components/cluster-settings/cluster-settings.yaml` and injected into the manifests by Kustomize — edit that one file when forking the repo.
+### Layer 1: K3s Node Infrastructure (OpenTofu)
+Located in [`iac-k3s/`](./iac-k3s/):
+- Provisions the 3 K3s node VMs (`k3s-dev-hc1`, `k3s-dev-hc2`, `k3s-dev-hc3`) in Proxmox pool `Backup-Daily` with dual networking (`vmbr0` for LAN and `vmbr_ceph` for Ceph storage).
+
+### Layer 2: Cluster Bootstrap (Ansible)
+Located in [`ansible-k3s/`](./ansible-k3s/):
+- Bootstraps the 3-node HA K3s cluster, kube-vip (API VIP), MetalLB, Traefik, SOPS Operator, and ArgoCD.
+
+### Layer 3: GitOps Engine (ArgoCD)
+Located in [`gitops/`](./gitops/):
+- Continuously synchronizes add-ons and cluster infrastructure from your Forgejo Git repository (app-of-apps pattern).
 
 ---
 
 ## 📋 Global Prerequisites
 
 ### 🖥️ Infrastructure (Proxmox VE)
-- **Functional Cluster**: A Proxmox cluster (v7+ or v8+).
-- **Storage**: Ceph cluster running on Proxmox nodes (or external).
-- **Network**: All nodes must be on the same L2 network.
+- **Functional Cluster**: Proxmox VE cluster (v8+ recommended).
+- **Storage**: Ceph cluster running on Proxmox nodes (`pool1_ssd` pool for HA VM storage).
+- **Resource Pool**: `Backup-Daily` pool for automated daily backup jobs.
+- **Network**: VLAN 2004 (`10.20.4.0/24`) for LAN/Management and Ceph network (`10.20.3.0/24`).
 
 ### 💻 Control Machine
-- **OpenTofu / Ansible / SOPS / kubectl / age** installed.
+- **OpenTofu** (>= 1.11.0) or Terraform
+- **Ansible** (>= 2.15)
+- **kubectl**, **kustomize**, **sops**, **age**
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start Guide
 
-1. **Deploy VMs (OpenTofu)**:
-   ```bash
-   cd iac/
-   cp terraform.tfvars.example terraform.tfvars # Edit with your details
-   tofu init && tofu apply
-   ```
+### Step 0: Deploy Infrastructure Services VM (Prerequisite)
+Deploy the Forgejo, Infisical, and Traefik VM first:
 
-2. **Configure GitOps & Secrets**:
-   - Generate an Age key: `age-keygen -o age.key`
-   - Encrypt your secrets in the `gitops/` directory using `sops` (the `*.sops.yaml` files).
-   - Edit `gitops/components/cluster-settings/cluster-settings.yaml` — the single place for the Git source ArgoCD syncs (repo URL + branch), injected into the Applications by Kustomize.
-   - Edit `gitops/infrastructure/cert-manager/cluster-issuers.yaml` to configure your DNS provider, zone, and Let's Encrypt email.
-   - Edit `gitops/infrastructure/external-dns/values.yaml` to match your DNS provider and domain.
-   - Edit your preferred storage classes in `gitops/infrastructure/{ceph-csi,nfs-csi,smb-csi}/` if needed.
-   - Update `ansible-k3s/inventory/group_vars/all.yml` with your SSH deploy key, Age private key, ArgoCD domain, and repo URL.
+```bash
+# 1. Provision the infra-services VM on Proxmox
+cd iac-services/
+cp terraform.tfvars.example terraform.tfvars # Edit if needed
+tofu init && tofu apply
 
-3. **Bootstrap K3s & ArgoCD**:
-   ```bash
-   cd ../ansible-k3s/
-   ansible-galaxy install -r requirements.yml
-   cp inventory/hosts.yml.example inventory/hosts.yml # Insert IPs from IaC
-   cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml # Edit configs!
-   ansible-playbook -i inventory/hosts.yml site.yml
-   ```
+# 2. Configure the OS, Podman Rootless, Traefik v3, Forgejo & Infisical
+cd ../ansible-services/
+ansible-playbook -i inventory/hosts.yml playbook.yml
+```
+* **Forgejo HTTPS**: `https://git.infra-services.local` (or `https://10.20.4.253` with Host header)
+* **Forgejo Git SSH**: `ssh://git@git.infra-services.local:2222`
+* **Infisical HTTPS**: `https://infisical.infra-services.local`
+* **Admin Credentials**: saved locally in `ansible-services/output/forgejo-credentials.txt`
 
-4. **ArgoCD takes over!**
-   ArgoCD will automatically deploy everything inside the `gitops/` directory.
+### Step 1: Deploy K3s Cluster VMs
+```bash
+cd ../iac-k3s/
+cp terraform.tfvars.example terraform.tfvars # Edit if needed
+tofu init && tofu apply
+```
+
+### Step 2: Bootstrap K3s & ArgoCD
+```bash
+cd ../ansible-k3s/
+ansible-galaxy install -r requirements.yml
+cp inventory/hosts.yml.example inventory/hosts.yml
+cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml # Edit configs!
+ansible-playbook -i inventory/hosts.yml site.yml
+```
+
+### Step 3: ArgoCD GitOps Takes Over
+ArgoCD will automatically synchronize manifests from Forgejo and deploy everything declared in [`gitops/`](./gitops/).
 
 ---
 

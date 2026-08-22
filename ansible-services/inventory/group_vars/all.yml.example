@@ -1,0 +1,58 @@
+---
+# Global Configuration — Infra Services VM (Forgejo + Infisical)
+
+system_timezone_value: "Europe/Paris"
+essential_packages_extra: []
+
+service_user_name: "services"
+service_user_ssh_keys: []
+
+ssh_allow_tcp_forwarding: false
+fail2ban_ignoreip: "127.0.0.1/8 ::1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+
+firewall_rules:
+  - { port: "22", proto: "tcp", rule: "allow", comment: "SSH Admin" }
+  - { port: "80", proto: "tcp", rule: "allow", comment: "HTTP Traefik (Redirect HTTPS)" }
+  - { port: "443", proto: "tcp", rule: "allow", comment: "HTTPS Traefik" }
+  - { port: "8000", proto: "tcp", rule: "allow", comment: "Traefik Rootless HTTP" }
+  - { port: "8443", proto: "tcp", rule: "allow", comment: "Traefik Rootless HTTPS" }
+  - { port: "2222", proto: "tcp", rule: "allow", comment: "Forgejo Git SSH" }
+
+container_log_driver: "json-file"
+container_log_max_size: "500m"
+container_log_max_file: "3"
+
+traefik_enabled: true
+traefik_version: "v3"
+traefik_http_port: 8000
+traefik_https_port: 8443
+traefik_cert_validity_days: 10950 # 30 years
+traefik_forgejo_domain: "git.example.com"
+traefik_infisical_domain: "infisical.example.com"
+
+forgejo_enabled: true
+forgejo_version: "16.0.3"
+forgejo_http_port: 3000
+forgejo_ssh_port: 2222
+forgejo_db_name: "forgejo"
+forgejo_db_user: "forgejo"
+forgejo_disable_registration: true
+forgejo_admin_create: true
+forgejo_admin_username: "admin"
+forgejo_admin_email: "admin@example.com"
+forgejo_admin_password: ""
+
+infisical_enabled: true
+infisical_version: "latest"
+infisical_port: 8080
+infisical_db_name: "infisical"
+infisical_db_user: "infisical"
+infisical_db_password: ""
+infisical_redis_password: ""
+infisical_encryption_key: ""
+infisical_auth_secret: ""
+
+# JWT Token Lifetimes (Production Hardening)
+infisical_jwt_auth_lifetime: "15m"
+infisical_jwt_refresh_lifetime: "24h"
+infisical_jwt_service_lifetime: "1h"

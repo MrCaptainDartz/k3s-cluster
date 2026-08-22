@@ -1,0 +1,54 @@
+---
+- name: Provision and configure Dedicated Infrastructure Services VM (Forgejo + Infisical)
+  hosts: all
+  become: true
+  pre_tasks:
+    - name: Wait for cloud-init to complete initial setup
+      ansible.builtin.wait_for:
+        path: /var/lib/cloud/instance/boot-finished
+        state: present
+        timeout: 600
+
+  roles:
+    - system_timezone
+    - essential_packages
+    - security_hardening
+    - firewall
+    - service_user
+    - podman
+    - role: forgejo
+      when: forgejo_enabled | default(true)
+    - role: infisical
+      when: infisical_enabled | default(true)
+    - role: traefik
+      when: traefik_enabled | default(true)
+
+  post_tasks:
+    - name: Check if a reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file
+
+    - name: Reboot machine if package or kernel updates require it
+      ansible.builtin.reboot:
+        msg: "Rebooting machine due to package/kernel updates applied during playbook execution"
+        connect_timeout: 5
+        reboot_timeout: 300
+        pre_reboot_delay: 2
+        post_reboot_delay: 10
+        test_command: uptime
+      when: reboot_required_file.stat.exists
+
+    - name: Display Services Summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================================="
+          - " Infrastructure Services VM ({{ inventory_hostname }}) Ready!"
+          - "=========================================================="
+          - " Admin SSH       : ssh {{ ansible_user }}@{{ ansible_host }}"
+          - " Forgejo HTTPS   : https://{{ traefik_forgejo_domain }}"
+          - " Forgejo Git SSH : ssh://git@{{ traefik_forgejo_domain }}:{{ forgejo_ssh_port | default(2222) }}"
+          - " Infisical HTTPS : https://{{ traefik_infisical_domain }}"
+          - " Reverse Proxy   : Traefik v3 (TLS Self-Signed 30-year, Ports 80/443)"
+          - " Service User    : {{ service_user_name }} (Rootless Podman, No Sudo)"
+          - "=========================================================="

@@ -1,0 +1,135 @@
+---
+# tasks file for traefik
+
+- name: Create Traefik application directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0775'
+  loop:
+    - "/home/{{ service_user_name }}/traefik"
+    - "/home/{{ service_user_name }}/traefik/config"
+    - "/home/{{ service_user_name }}/traefik/config/dynamic"
+    - "/home/{{ service_user_name }}/traefik/certs"
+    - "/home/{{ service_user_name }}/traefik/logs"
+    - "/home/{{ service_user_name }}/.config"
+    - "/home/{{ service_user_name }}/.config/systemd"
+    - "/home/{{ service_user_name }}/.config/systemd/user"
+
+- name: Check if existing TLS certificate exists
+  ansible.builtin.stat:
+    path: "/home/{{ service_user_name }}/traefik/certs/tls.crt"
+  register: traefik_cert_stat
+
+- name: Check if existing TLS certificate is ECDSA and matches configured domains
+  ansible.builtin.command:
+    cmd: "openssl x509 -in /home/{{ service_user_name }}/traefik/certs/tls.crt -noout -text"
+  register: existing_cert_info
+  changed_when: false
+  failed_when: false
+  when: traefik_cert_stat.stat.exists
+
+- name: Check existing TLS certificate Subject Alternative Names (SAN)
+  ansible.builtin.command:
+    cmd: "openssl x509 -in /home/{{ service_user_name }}/traefik/certs/tls.crt -noout -ext subjectAltName"
+  register: existing_cert_san
+  changed_when: false
+  failed_when: false
+  when: traefik_cert_stat.stat.exists
+
+- name: Generate self-signed ECDSA (P-384) TLS certificate (30 years validity) with SAN
+  ansible.builtin.command:
+    cmd: >-
+      openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:secp384r1 -nodes
+      -days {{ traefik_cert_validity_days | default(10950) }}
+      -keyout /home/{{ service_user_name }}/traefik/certs/tls.key
+      -out /home/{{ service_user_name }}/traefik/certs/tls.crt
+      -subj "/CN={{ traefik_forgejo_domain }}/O=Homelab/OU=Infrastructure"
+      -addext "subjectAltName=DNS:{{ traefik_forgejo_domain }},DNS:{{ traefik_infisical_domain }},DNS:localhost,IP:{{ ansible_host }},IP:127.0.0.1"
+  become: true
+  become_user: "{{ service_user_name }}"
+  notify: Restart Traefik service
+  when: >
+    (not traefik_cert_stat.stat.exists) or
+    (existing_cert_info.stdout is defined and 'id-ecPublicKey' not in existing_cert_info.stdout) or
+    (existing_cert_san.stdout is defined and ('DNS:' + traefik_forgejo_domain) not in existing_cert_san.stdout) or
+    (existing_cert_san.stdout is defined and ('DNS:' + traefik_infisical_domain) not in existing_cert_san.stdout)
+
+- name: Ensure correct permissions on TLS certificate and private key
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "/home/{{ service_user_name }}/traefik/certs/tls.key", mode: '0600' }
+    - { path: "/home/{{ service_user_name }}/traefik/certs/tls.crt", mode: '0644' }
+
+- name: Deploy Traefik static configuration
+  ansible.builtin.template:
+    src: traefik.yml.j2
+    dest: "/home/{{ service_user_name }}/traefik/config/traefik.yml"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0644'
+  notify: Restart Traefik service
+
+- name: Deploy Traefik dynamic configuration (Routers, Services, TLS)
+  ansible.builtin.template:
+    src: dynamic.yml.j2
+    dest: "/home/{{ service_user_name }}/traefik/config/dynamic/dynamic.yml"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0644'
+  notify: Restart Traefik service
+
+- name: Deploy Traefik docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "/home/{{ service_user_name }}/traefik/docker-compose.yml"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0640'
+  notify: Restart Traefik service
+
+- name: Deploy Traefik systemd user service unit
+  ansible.builtin.template:
+    src: traefik.service.j2
+    dest: "/home/{{ service_user_name }}/.config/systemd/user/traefik.service"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0644'
+  notify: Restart Traefik service
+
+- name: Get service user UID
+  ansible.builtin.command:
+    cmd: "id -u {{ service_user_name }}"
+  register: traefik_service_uid
+  changed_when: false
+
+- name: Reload systemd user daemon for service user
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+    scope: user
+  become: true
+  become_user: "{{ service_user_name }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ traefik_service_uid.stdout }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ traefik_service_uid.stdout }}/bus"
+
+- name: Enable and start Traefik service for service user
+  ansible.builtin.systemd_service:
+    name: traefik.service
+    scope: user
+    state: started
+    enabled: true
+  become: true
+  become_user: "{{ service_user_name }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ traefik_service_uid.stdout }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ traefik_service_uid.stdout }}/bus"
+
+- name: Flush handlers to restart Traefik if configuration changed
+  ansible.builtin.meta: flush_handlers

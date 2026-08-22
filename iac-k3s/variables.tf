@@ -47,7 +47,7 @@ variable "image_datastore_id" {
 
 variable "vm_config" {
   type = map(object({
-    node_name          = string
+    node_name = string
     network_interfaces = list(object({
       bridge  = string
       address = string
@@ -57,22 +57,22 @@ variable "vm_config" {
   }))
   description = "Map of VM configurations: key = VM name, value = node, and a list of network interfaces (bridge, address with CIDR, gateway, vlan_id). VM IDs are assigned automatically."
   default = {
-    "vm-hc1" = {
-      node_name = "srv-tlm-hc1"
+    "k3s-node-1" = {
+      node_name = "pve-node-1"
       network_interfaces = [
         { bridge = "vmbr0", address = "10.20.4.1/24", gateway = "10.20.4.254" },
         { bridge = "vmbr_ceph", address = "10.20.3.1/24" }
       ]
     }
-    "vm-hc2" = {
-      node_name = "srv-tlm-hc2"
+    "k3s-node-2" = {
+      node_name = "pve-node-2"
       network_interfaces = [
         { bridge = "vmbr0", address = "10.20.4.2/24", gateway = "10.20.4.254" },
         { bridge = "vmbr_ceph", address = "10.20.3.2/24" }
       ]
     }
-    "vm-hc3" = {
-      node_name = "srv-tlm-hc3"
+    "k3s-node-3" = {
+      node_name = "pve-node-3"
       network_interfaces = [
         { bridge = "vmbr0", address = "10.20.4.3/24", gateway = "10.20.4.254" },
         { bridge = "vmbr_ceph", address = "10.20.3.3/24" }
@@ -162,16 +162,52 @@ variable "vm_disk_datastore_id" {
   default     = "local-lvm"
 }
 
+variable "vm_disk_iothread" {
+  type        = bool
+  description = "Whether to enable a dedicated IOThread for the disk (improves I/O performance on SSD/Ceph)"
+  default     = true
+}
+
+variable "vm_scsi_hardware" {
+  type        = string
+  description = "SCSI controller hardware type (e.g. 'virtio-scsi-single', 'virtio-scsi-pci')"
+  default     = "virtio-scsi-single"
+}
+
+variable "vm_boot_order" {
+  type        = list(string)
+  description = "Boot device order list"
+  default     = ["scsi0"]
+}
+
 variable "vm_start_on_boot" {
   type        = bool
   description = "Whether VMs should automatically start when the Proxmox node boots"
   default     = true
 }
 
+variable "vm_startup_order" {
+  type        = number
+  description = "Startup order of the K3s cluster VMs on Proxmox node boot (2 = starts after services VM)"
+  default     = 2
+}
+
+variable "vm_startup_up_delay" {
+  type        = number
+  description = "Delay in seconds after starting this VM"
+  default     = 0
+}
+
 variable "vm_tags" {
   type        = list(string)
   description = "Tags to apply to all VMs in Proxmox (e.g., [\"k3s\", \"opentofu\"])"
   default     = ["k3s", "opentofu"]
+}
+
+variable "pool_id" {
+  type        = string
+  description = "Optional Proxmox resource pool ID to assign all VMs to (e.g., 'Backup-Daily')"
+  default     = "Backup-Daily"
 }
 
 # VM — Network

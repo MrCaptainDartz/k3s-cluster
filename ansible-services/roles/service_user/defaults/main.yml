@@ -1,0 +1,6 @@
+---
+# defaults file for service_user
+service_user_name: "services"
+service_user_comment: "Unprivileged Infrastructure Services User"
+service_user_home: "/home/{{ service_user_name }}"
+service_user_ssh_keys: []

@@ -17,8 +17,8 @@ ssh_public_key = "ssh-rsa AAAAB3NzaC1yc... myuser@myworkstation"
 # VM Configuration (optional — default values below)
 # Each entry: node_name, and network_interfaces
 # vm_config = {
-#   "vm-hc1" = {
-#     node_name = "srv-tlm-hc1"
+#   "vm-node-1" = {
+#     node_name = "pve-node-1"
 #     network_interfaces = [
 #       {
 #         bridge  = "vmbr0"
@@ -33,8 +33,8 @@ ssh_public_key = "ssh-rsa AAAAB3NzaC1yc... myuser@myworkstation"
 #       }
 #     ]
 #   }
-#   "vm-hc2" = {
-#     node_name = "srv-tlm-hc2"
+#   "vm-node-2" = {
+#     node_name = "pve-node-2"
 #     network_interfaces = [
 #       {
 #         bridge  = "vmbr0"
@@ -47,8 +47,8 @@ ssh_public_key = "ssh-rsa AAAAB3NzaC1yc... myuser@myworkstation"
 #       }
 #     ]
 #   }
-#   "vm-hc3" = {
-#     node_name = "srv-tlm-hc3"
+#   "vm-node-3" = {
+#     node_name = "pve-node-3"
 #     network_interfaces = [
 #       {
 #         bridge  = "vmbr0"
@@ -71,21 +71,27 @@ ssh_public_key = "ssh-rsa AAAAB3NzaC1yc... myuser@myworkstation"
 # image_datastore_id          = "local"
 
 # VM Resources
-# vm_machine_type      = "q35"     # "q35" (recommended for PCIe/UEFI) or "pc" (Legacy)
-# vm_bios              = "seabios" # "seabios" or "ovmf" (UEFI)
-# vm_vga_type          = "qxl"     # "qxl" (SPICE), "std" (Default), "serial0", "vmware"
-# vm_keyboard_layout   = "fr"      # "fr", "en-us", etc.
+# vm_machine_type      = "q35"                  # "q35" (recommended for PCIe/UEFI) or "pc" (Legacy)
+# vm_bios              = "seabios"              # "seabios" or "ovmf" (UEFI)
+# vm_scsi_hardware     = "virtio-scsi-single"  # "virtio-scsi-single" (recommended for dedicated IOThread) or "virtio-scsi-pci"
+# vm_disk_iothread     = true                   # Dedicated IOThread for OS disk
+# vm_boot_order        = ["scsi0"]              # Direct boot device order
+# vm_vga_type          = "qxl"                  # "qxl" (SPICE), "std" (Default), "serial0", "vmware"
+# vm_keyboard_layout   = "fr"                   # "fr", "en-us", etc.
 # vm_cpu_cores         = 16
 # vm_cpu_type          = "x86-64-v2-AES"
 # vm_memory_mb         = 24576   # 24 GiB
 # vm_disk_size_gb      = 120
 # vm_disk_datastore_id = "local-lvm"
 
-# Automatic Startup
-# vm_start_on_boot = true
+# Automatic Startup & Proxmox boot sequence (Position 2, after 60s services VM delay)
+# vm_start_on_boot    = true
+# vm_startup_order    = 2
+# vm_startup_up_delay = 0
 
-# Proxmox Tags
-# vm_tags = ["k3s", "opentofu"]
+# Proxmox Tags & Resource Pool
+# vm_tags = ["k3s", "kubernetes", "opentofu"]
+# pool_id = "Backup-Daily"
 
 
 # Cloud-Init user
