@@ -79,5 +79,16 @@ openbao_pki_root_ttl: "175200h" # 20 years
 openbao_pki_cert_ttl: "2160h"   # 3 months (90 days)
 traefik_cert_renew_threshold_seconds: 2592000 # 30 days
 
+openbao_totp_enabled: true
+openbao_totp_issuer: "OpenBao"
+openbao_totp_period: 30
+openbao_totp_digits: 6
+openbao_totp_key_size: 32
+openbao_totp_algorithm: "SHA256"
+openbao_totp_skew: 1
+openbao_totp_max_validation_attempts: 5
+
+
+
 
 

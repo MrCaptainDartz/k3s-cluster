@@ -236,17 +236,45 @@
     body_format: json
     body:
       policy: |
-        path "sys/auth/*" { capabilities = ["create", "read", "update", "delete", "sudo", "list"] }
-        path "sys/mounts/*" { capabilities = ["create", "read", "update", "delete", "sudo", "list"] }
-        path "sys/policies/*" { capabilities = ["create", "read", "update", "delete", "sudo", "list"] }
+        # Manage and list auth methods
+        path "auth/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+        path "sys/auth/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+        path "sys/auth" { capabilities = ["read"] }
+
+        # Manage and list secrets engines
+        path "sys/mounts/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+        path "sys/mounts" { capabilities = ["read"] }
+
+        # Manage policies
+        path "sys/policies/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+        path "sys/policy/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
         path "sys/policy" { capabilities = ["read", "list"] }
-        path "secret/*" { capabilities = ["create", "read", "update", "delete", "list"] }
-        path "identity/*" { capabilities = ["create", "read", "update", "delete", "list"] }
-        path "sys/audit/*" { capabilities = ["create", "read", "update", "delete", "sudo", "list"] }
+
+        # Manage namespaces
+        path "sys/namespaces/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+        path "sys/namespaces" { capabilities = ["read", "list"] }
+
+        # Manage storage & Raft cluster
+        path "sys/storage/raft/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+        path "sys/storage/raft/configuration" { capabilities = ["read", "list"] }
+
+        # Secrets engines access (KV, PKI, etc.)
+        path "secret/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+        path "pki/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+
+
+        # Identity & entities
+        path "identity/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+
+        # System leases, health, audit and tools
+        path "sys/leases/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+        path "sys/audit/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+        path "sys/audit" { capabilities = ["read", "list"] }
         path "sys/health" { capabilities = ["read"] }
+        path "sys/seal-status" { capabilities = ["read"] }
         path "sys/capabilities-self" { capabilities = ["update"] }
-        path "pki/*" { capabilities = ["create", "read", "update", "delete", "list"] }
     status_code: [200, 204]
+
   when:
     - openbao_bootstrap_provisioning | default(true) | bool
     - openbao_init_res is not skipped
@@ -330,6 +358,125 @@
     - openbao_init_res is not skipped
     - openbao_init_res.json is defined
     - "'root_token' in openbao_init_res.json"
+
+- name: Create or resolve OpenBao identity entity for admin user
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/identity/entity"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      name: "{{ openbao_admin_username }}"
+      metadata:
+        organization: "Homelab"
+        role: "superadmin"
+    status_code: 200
+  register: openbao_admin_entity_res
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_totp_enabled | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Retrieve auth method accessors for identity alias mapping
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/auth"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    status_code: 200
+  register: openbao_sys_auth_res
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_totp_enabled | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Create identity entity alias for admin userpass login
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/identity/entity-alias"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      name: "{{ openbao_admin_username }}"
+      canonical_id: "{{ openbao_admin_entity_res.json.data.id }}"
+      mount_accessor: "{{ openbao_sys_auth_res.json.data['userpass/'].accessor | default(openbao_sys_auth_res.json['userpass/'].accessor) }}"
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_totp_enabled | default(true) | bool
+    - openbao_admin_entity_res is defined
+    - openbao_admin_entity_res.json is defined
+    - openbao_admin_entity_res.json.data is defined
+
+- name: Configure OpenBao TOTP Multi-Factor Authentication method
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/identity/mfa/method/totp"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      name: "admin_totp"
+      issuer: "{{ openbao_totp_issuer }}"
+      period: "{{ openbao_totp_period | int }}"
+      key_size: "{{ openbao_totp_key_size | int }}"
+      algorithm: "{{ openbao_totp_algorithm }}"
+      digits: "{{ openbao_totp_digits | int }}"
+      skew: "{{ openbao_totp_skew | int }}"
+      max_validation_attempts: "{{ openbao_totp_max_validation_attempts | int }}"
+    status_code: 200
+  register: openbao_totp_method_res
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_totp_enabled | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Generate TOTP secret and barcode URL for admin entity
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/identity/mfa/method/totp/admin-generate"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      method_id: "{{ openbao_totp_method_res.json.data.method_id }}"
+      entity_id: "{{ openbao_admin_entity_res.json.data.id }}"
+    status_code: 200
+  register: openbao_totp_gen_res
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_totp_enabled | default(true) | bool
+    - openbao_totp_method_res is defined
+    - openbao_totp_method_res.json is defined
+    - openbao_totp_method_res.json.data is defined
+
+- name: Enforce TOTP MFA login requirement on admin account
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/identity/mfa/login-enforcement/enforce_admin_totp"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      name: "enforce_admin_totp"
+      mfa_method_ids: ["{{ openbao_totp_method_res.json.data.method_id }}"]
+      identity_entity_ids: ["{{ openbao_admin_entity_res.json.data.id }}"]
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_totp_enabled | default(true) | bool
+    - openbao_totp_method_res is defined
+    - openbao_totp_method_res.json is defined
+    - openbao_totp_method_res.json.data is defined
+
 
 - name: Enable OpenBao AppRole authentication method
   ansible.builtin.uri:
@@ -682,11 +829,18 @@
       {% endfor %}
 
       ------------------------------------------------------------
-      Admin Account (Userpass + MFA Ready):
+      Admin Account (Userpass + TOTP MFA Protected):
       ------------------------------------------------------------
       Username          : {{ openbao_admin_username }}
       Password          : {{ effective_openbao_admin_password }}
       Policy            : admin-policy
+      {% if openbao_totp_gen_res is defined and openbao_totp_gen_res.json is defined and openbao_totp_gen_res.json.data is defined and openbao_totp_gen_res.json.data.url is defined %}
+      TOTP Setup URL    : {{ openbao_totp_gen_res.json.data.url }}
+      TOTP Secret Key   : {{ openbao_totp_gen_res.json.data.url.split('secret=')[1].split('&')[0] }}
+      TOTP Settings     : {{ openbao_totp_digits }} digits, {{ openbao_totp_period }}s period, {{ openbao_totp_algorithm }} (Issuer: {{ openbao_totp_issuer }})
+      {% endif %}
+
+
 
       ------------------------------------------------------------
       Ansible Automation AppRole:
@@ -694,6 +848,7 @@
       Role ID           : {{ openbao_ansible_role_id.json.data.role_id | default('N/A') }}
       Secret ID         : {{ openbao_ansible_secret_id.json.data.secret_id | default('N/A') }}
       Policy            : ansible-policy
+
 
       ------------------------------------------------------------
       Traefik Cert Renewer AppRole:

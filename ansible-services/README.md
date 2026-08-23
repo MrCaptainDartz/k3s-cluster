@@ -65,6 +65,7 @@ On first boot (when OpenBao is uninitialized), the playbook automatically:
 - **Root CA Certificate**: Saved to `output/openbao-ca.crt` (import this certificate into your browser or OS trust store to trust all `*.infra-services.local` HTTPS endpoints without warnings).
 - **Admin Credentials**: Saved automatically to `output/`:
   - `output/forgejo-credentials.txt`: Forgejo admin username & password.
-  - `output/openbao-credentials.txt`: Initial Root Token, Unseal Keys, nominative admin account, Ansible AppRole (Role ID & Secret ID), Traefik AppRole, and PKI summary.
+  - `output/openbao-credentials.txt`: Initial Root Token, Unseal Keys, nominative admin account (with TOTP MFA secret key & setup URL for Bitwarden), Ansible AppRole (Role ID & Secret ID), Traefik AppRole, and PKI summary.
+
 
 
