@@ -67,6 +67,10 @@
       # Point Docker tools to Podman Rootless socket
       export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
 
+      # OpenBao & Vault CLI address
+      export BAO_ADDR="http://127.0.0.1:8200"
+      export VAULT_ADDR="http://127.0.0.1:8200"
+
       # User local binaries
       export PATH="$HOME/.local/bin:$PATH"
     create: true

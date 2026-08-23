@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenBao Automated Local Unseal Service
+After=openbao.service
+PartOf=openbao.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory={{ openbao_dir }}
+ExecStart={{ openbao_dir }}/unseal.sh
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=default.target openbao.service

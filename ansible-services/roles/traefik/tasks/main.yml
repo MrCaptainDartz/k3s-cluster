@@ -47,7 +47,7 @@
       -keyout /home/{{ service_user_name }}/traefik/certs/tls.key
       -out /home/{{ service_user_name }}/traefik/certs/tls.crt
       -subj "/CN={{ traefik_forgejo_domain }}/O=Homelab/OU=Infrastructure"
-      -addext "subjectAltName=DNS:{{ traefik_forgejo_domain }},DNS:{{ traefik_infisical_domain }},DNS:localhost,IP:{{ ansible_host }},IP:127.0.0.1"
+      -addext "subjectAltName=DNS:{{ traefik_forgejo_domain }},DNS:{{ traefik_openbao_domain }},DNS:localhost,IP:{{ ansible_host }},IP:127.0.0.1"
   become: true
   become_user: "{{ service_user_name }}"
   notify: Restart Traefik service
@@ -55,7 +55,7 @@
     (not traefik_cert_stat.stat.exists) or
     (existing_cert_info.stdout is defined and 'id-ecPublicKey' not in existing_cert_info.stdout) or
     (existing_cert_san.stdout is defined and ('DNS:' + traefik_forgejo_domain) not in existing_cert_san.stdout) or
-    (existing_cert_san.stdout is defined and ('DNS:' + traefik_infisical_domain) not in existing_cert_san.stdout)
+    (existing_cert_san.stdout is defined and ('DNS:' + traefik_openbao_domain) not in existing_cert_san.stdout)
 
 - name: Ensure correct permissions on TLS certificate and private key
   ansible.builtin.file:

@@ -8,4 +8,4 @@ firewall_rules:
   - { port: "22", proto: "tcp", rule: "limit", comment: "SSH Admin Rate Limited" }
   - { port: "2222", proto: "tcp", rule: "allow", comment: "Forgejo Git SSH" }
   - { port: "3000", proto: "tcp", rule: "allow", comment: "Forgejo Web UI" }
-  - { port: "8080", proto: "tcp", rule: "allow", comment: "Infisical Web / API" }
+  - { port: "8200", proto: "tcp", rule: "allow", comment: "OpenBao Web / API" }

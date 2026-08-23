@@ -1,5 +1,5 @@
 ---
-- name: Provision and configure Dedicated Infrastructure Services VM (Forgejo + Infisical)
+- name: Provision and configure Dedicated Infrastructure Services VM (Forgejo + OpenBao)
   hosts: all
   become: true
   pre_tasks:
@@ -18,8 +18,8 @@
     - podman
     - role: forgejo
       when: forgejo_enabled | default(true)
-    - role: infisical
-      when: infisical_enabled | default(true)
+    - role: openbao
+      when: openbao_enabled | default(true)
     - role: traefik
       when: traefik_enabled | default(true)
 
@@ -48,7 +48,8 @@
           - " Admin SSH       : ssh {{ ansible_user }}@{{ ansible_host }}"
           - " Forgejo HTTPS   : https://{{ traefik_forgejo_domain }}"
           - " Forgejo Git SSH : ssh://git@{{ traefik_forgejo_domain }}:{{ forgejo_ssh_port | default(2222) }}"
-          - " Infisical HTTPS : https://{{ traefik_infisical_domain }}"
+          - " OpenBao HTTPS   : https://{{ traefik_openbao_domain }}"
           - " Reverse Proxy   : Traefik v3 (TLS Self-Signed 30-year, Ports 80/443)"
           - " Service User    : {{ service_user_name }} (Rootless Podman, No Sudo)"
+          - " Credentials     : Saved to ansible-services/output/ (Forgejo & OpenBao)"
           - "=========================================================="

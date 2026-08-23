@@ -9,4 +9,4 @@ traefik_cert_validity_days: 10950 # 30 years (10950 days)
 
 # Default domain names (overridden in inventory/group_vars/all.yml)
 traefik_forgejo_domain: "git.example.com"
-traefik_infisical_domain: "infisical.example.com"
+traefik_openbao_domain: "openbao.example.com"

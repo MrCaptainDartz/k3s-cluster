@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# ============================================================
+# OpenBao Automated Local Unseal Script
+# ============================================================
+set -euo pipefail
+
+OPENBAO_ADDR="http://127.0.0.1:{{ openbao_port }}"
+KEYS_FILE="{{ openbao_dir }}/.unseal_keys"
+MAX_ATTEMPTS=30
+DELAY_SECONDS=2
+
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [OpenBao Unseal] $*"
+}
+
+# 1. Wait for OpenBao API to be ready
+log "Waiting for OpenBao API to be responsive at ${OPENBAO_ADDR}..."
+READY=false
+for ((i=1; i<=MAX_ATTEMPTS; i++)); do
+  if STATUS_JSON=$(curl -s --connect-timeout 2 "${OPENBAO_ADDR}/v1/sys/seal-status" 2>/dev/null); then
+    if [[ -n "${STATUS_JSON}" ]] && echo "${STATUS_JSON}" | grep -q '"sealed"'; then
+      READY=true
+      break
+    fi
+  fi
+  sleep "${DELAY_SECONDS}"
+done
+
+if [[ "${READY}" != "true" ]]; then
+  log "ERROR: OpenBao API is not responsive after $((MAX_ATTEMPTS * DELAY_SECONDS))s."
+  exit 1
+fi
+
+# 2. Check if already unsealed
+IS_SEALED=$(echo "${STATUS_JSON}" | grep -o '"sealed":[^,}]*' | awk -F: '{print $2}' | tr -d ' "')
+IS_INITIALIZED=$(echo "${STATUS_JSON}" | grep -o '"initialized":[^,}]*' | awk -F: '{print $2}' | tr -d ' "')
+
+if [[ "${IS_INITIALIZED}" != "true" ]]; then
+  log "WARNING: OpenBao is not initialized yet. Skipping auto-unseal."
+  exit 0
+fi
+
+if [[ "${IS_SEALED}" == "false" ]]; then
+  log "OpenBao is already unsealed."
+  exit 0
+fi
+
+# 3. Check for unseal keys file
+if [[ ! -f "${KEYS_FILE}" ]] || [[ ! -s "${KEYS_FILE}" ]]; then
+  log "WARNING: No unseal keys found in ${KEYS_FILE}. Please configure unseal keys."
+  exit 0
+fi
+
+log "OpenBao is sealed. Attempting automated unseal with local keys..."
+
+# 4. Apply unseal keys line by line
+while IFS= read -r key || [[ -n "${key}" ]]; do
+  # Skip comments and empty lines
+  [[ "${key}" =~ ^[[:space:]]*# ]] && continue
+  [[ -z "${key// }" ]] && continue
+
+  log "Submitting unseal key..."
+  RESPONSE=$(curl -s -X POST "${OPENBAO_ADDR}/v1/sys/unseal" \
+    -H "Content-Type: application/json" \
+    -d "{\"key\": \"${key}\"}")
+
+  CURRENT_SEALED=$(echo "${RESPONSE}" | grep -o '"sealed":[^,}]*' | awk -F: '{print $2}' | tr -d ' "')
+  if [[ "${CURRENT_SEALED}" == "false" ]]; then
+    log "SUCCESS: OpenBao successfully unsealed and operational!"
+    exit 0
+  fi
+done < "${KEYS_FILE}"
+
+# Final check
+FINAL_STATUS=$(curl -s "${OPENBAO_ADDR}/v1/sys/seal-status" 2>/dev/null || true)
+if echo "${FINAL_STATUS}" | grep -q '"sealed":false'; then
+  log "SUCCESS: OpenBao is unsealed."
+  exit 0
+else
+  log "WARNING: Unseal process completed, but OpenBao is still sealed (more key shares may be required)."
+  exit 1
+fi

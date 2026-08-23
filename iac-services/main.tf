@@ -34,7 +34,7 @@ EOF
   }
 }
 
-# Dedicated Infrastructure Services VM (Forgejo + Infisical)
+# Dedicated Infrastructure Services VM (Forgejo + OpenBao)
 resource "proxmox_virtual_environment_vm" "infra_services" {
   name        = var.vm_name
   vm_id       = var.vm_id
@@ -145,7 +145,7 @@ resource "proxmox_haresource" "infra_services" {
   resource_id  = "vm:${proxmox_virtual_environment_vm.infra_services.vm_id}"
   state        = var.ha_state
   group        = var.ha_group
-  comment      = "HA for infra-services VM (Forgejo + Infisical)"
+  comment      = "HA for infra-services VM (Forgejo + OpenBao)"
   max_restart  = var.ha_max_restart
   max_relocate = var.ha_max_relocate
 }

@@ -1,0 +1,40 @@
+# ============================================================
+# OpenBao Production Configuration (config.hcl)
+# ============================================================
+
+# Enable OpenBao Graphical User Interface (Web UI)
+ui = {{ openbao_ui | lower }}
+
+# Integrated Storage Backend (Raft)
+storage "raft" {
+  path    = "/bao/data"
+  node_id = "openbao-node-1"
+}
+
+# TCP Network Listener (Proxied securely via Traefik TLS)
+listener "tcp" {
+  address         = "0.0.0.0:{{ openbao_port }}"
+  cluster_address = "0.0.0.0:{{ openbao_cluster_port }}"
+  tls_disable     = 1
+
+  # Security: Disable unauthenticated metrics
+  telemetry {
+    unauthenticated_metrics_access = false
+  }
+}
+
+# Cluster and Public API URLs
+api_addr     = "https://{{ traefik_openbao_domain }}"
+cluster_addr = "http://openbao:{{ openbao_cluster_port }}"
+
+
+
+# Logging Configuration
+log_level = "{{ openbao_log_level }}"
+
+# Leases TTL defaults (32 days)
+default_lease_ttl = "768h"
+max_lease_ttl     = "768h"
+
+# Security: Disable raw storage endpoint inspection
+raw_storage_endpoint = false

@@ -1,0 +1,5 @@
+# OpenBao Local Unseal Keys (Ansible Managed)
+# WARNING: Protected file (mode 0600)
+{% for key in effective_unseal_keys | default(openbao_unseal_keys) %}
+{{ key }}
+{% endfor %}

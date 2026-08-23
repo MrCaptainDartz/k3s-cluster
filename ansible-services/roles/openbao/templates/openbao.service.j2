@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenBao Secret Management Service (Rootless Podman Compose)
+After=network-online.target
+Wants=network-online.target
+{% if openbao_auto_unseal | default(true) %}
+Wants=openbao-unseal.service
+{% endif %}
+
+[Service]
+Type=simple
+WorkingDirectory={{ openbao_dir }}
+ExecStart=/usr/bin/podman-compose -f {{ openbao_dir }}/docker-compose.yml up
+ExecStop=/usr/bin/podman-compose -f {{ openbao_dir }}/docker-compose.yml down
+Restart=always
+RestartSec=5s
+TimeoutStartSec=120s
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=default.target

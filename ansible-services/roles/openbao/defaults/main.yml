@@ -1,0 +1,25 @@
+---
+# defaults file for openbao
+openbao_enabled: true
+openbao_version: "2.6"
+openbao_image: "ghcr.io/openbao/openbao:{{ openbao_version }}"
+openbao_dir: "/home/{{ service_user_name }}/openbao"
+openbao_port: 8200
+openbao_cluster_port: 8201
+openbao_ui: true
+openbao_log_level: "info"
+openbao_log_driver: "{{ container_log_driver | default('json-file') }}"
+openbao_log_max_size: "{{ container_log_max_size | default('500m') }}"
+openbao_log_max_file: "{{ container_log_max_file | default('3') }}"
+
+# Default domain name for Traefik routing
+traefik_openbao_domain: "openbao.example.com"
+
+# Automated OpenBao Bootstrap (Auto-Initialization & Auto-Unseal)
+openbao_auto_init: true
+openbao_secret_shares: 1
+openbao_secret_threshold: 1
+openbao_auto_unseal: true
+openbao_unseal_keys: []
+
+

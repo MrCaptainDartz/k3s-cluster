@@ -10,12 +10,12 @@ http:
         - "security-headers"
       tls: {}
 
-    # Infisical Secret Manager Web UI & API
-    infisical:
+    # OpenBao Secret Manager Web UI & API
+    openbao:
       entryPoints:
         - "websecure"
-      rule: "Host(`{{ traefik_infisical_domain }}`)"
-      service: "infisical-service"
+      rule: "Host(`{{ traefik_openbao_domain }}`)"
+      service: "openbao-service"
       middlewares:
         - "security-headers"
       tls: {}
@@ -26,10 +26,10 @@ http:
         servers:
           - url: "http://forgejo:3000"
 
-    infisical-service:
+    openbao-service:
       loadBalancer:
         servers:
-          - url: "http://infisical-backend:8080"
+          - url: "http://openbao:8200"
 
   middlewares:
     security-headers:

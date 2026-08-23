@@ -44,7 +44,7 @@ graph TD
 
 Before deploying the K3s VMs, ensure:
 
-1. **Infrastructure Services (Prerequisite)**: The persistent services VM (`infra-services` hosting Forgejo and Infisical) is deployed via [`../iac-services/`](../iac-services/) and configured with [`../ansible-services/`](../ansible-services/).
+1. **Infrastructure Services (Prerequisite)**: The persistent services VM (`infra-services` hosting Forgejo and OpenBao) is deployed via [`../iac-services/`](../iac-services/) and configured with [`../ansible-services/`](../ansible-services/).
 2. **Proxmox VE Cluster**: One or more nodes with Proxmox installed and accessible via API.
 3. **Storage & Bridges**: Datastores (`local`, `local-lvm`, `pool1_ssd`) and network bridges (`vmbr0`, `vmbr_ceph`) configured.
 

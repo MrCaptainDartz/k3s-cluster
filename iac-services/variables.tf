@@ -90,13 +90,13 @@ variable "vm_id" {
 variable "vm_description" {
   type        = string
   description = "Description for the VM in Proxmox"
-  default     = "Managed by OpenTofu - Dedicated Infra Services (Forgejo, Infisical)"
+  default     = "Managed by OpenTofu - Dedicated Infra Services (Forgejo, OpenBao)"
 }
 
 variable "vm_tags" {
   type        = list(string)
   description = "Tags applied to the VM in Proxmox"
-  default     = ["services", "gitops", "infisical", "forgejo", "opentofu"]
+  default     = ["services", "gitops", "openbao", "forgejo", "opentofu"]
 }
 
 variable "pool_id" {

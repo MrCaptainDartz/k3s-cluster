@@ -1,0 +1,219 @@
+---
+# tasks file for openbao
+
+- name: Create OpenBao application directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: "{{ item.mode | default('0775') }}"
+  loop:
+    - { path: "{{ openbao_dir }}" }
+    - { path: "{{ openbao_dir }}/config" }
+    - { path: "{{ openbao_dir }}/data", mode: '0777' }
+    - { path: "{{ openbao_dir }}/logs", mode: '0777' }
+    - { path: "/home/{{ service_user_name }}/.config" }
+    - { path: "/home/{{ service_user_name }}/.config/systemd" }
+    - { path: "/home/{{ service_user_name }}/.config/systemd/user" }
+
+- name: Deploy OpenBao configuration (config.hcl)
+  ansible.builtin.template:
+    src: config.hcl.j2
+    dest: "{{ openbao_dir }}/config/config.hcl"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0644'
+  notify: Restart OpenBao service
+
+- name: Deploy OpenBao docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ openbao_dir }}/docker-compose.yml"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0640'
+  notify: Restart OpenBao service
+
+- name: Deploy OpenBao auto-unseal script (unseal.sh)
+  ansible.builtin.template:
+    src: unseal.sh.j2
+    dest: "{{ openbao_dir }}/unseal.sh"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0700'
+
+- name: Deploy OpenBao unseal companion systemd user service unit
+  ansible.builtin.template:
+    src: openbao-unseal.service.j2
+    dest: "/home/{{ service_user_name }}/.config/systemd/user/openbao-unseal.service"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0644'
+
+- name: Deploy OpenBao systemd user service unit
+  ansible.builtin.template:
+    src: openbao.service.j2
+    dest: "/home/{{ service_user_name }}/.config/systemd/user/openbao.service"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0644'
+  notify: Restart OpenBao service
+
+- name: Get service user UID
+  ansible.builtin.command:
+    cmd: "id -u {{ service_user_name }}"
+  register: openbao_service_uid
+  changed_when: false
+
+- name: Reload systemd user daemon for service user
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+    scope: user
+  become: true
+  become_user: "{{ service_user_name }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ openbao_service_uid.stdout }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ openbao_service_uid.stdout }}/bus"
+
+- name: Enable OpenBao unseal companion service for service user
+  ansible.builtin.systemd_service:
+    name: openbao-unseal.service
+    scope: user
+    enabled: "{{ openbao_auto_unseal | default(true) | bool }}"
+  become: true
+  become_user: "{{ service_user_name }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ openbao_service_uid.stdout }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ openbao_service_uid.stdout }}/bus"
+
+- name: Enable and start OpenBao service for service user
+  ansible.builtin.systemd_service:
+    name: openbao.service
+    scope: user
+    state: started
+    enabled: true
+  become: true
+  become_user: "{{ service_user_name }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ openbao_service_uid.stdout }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ openbao_service_uid.stdout }}/bus"
+
+- name: Flush handlers to restart OpenBao if configuration changed
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for OpenBao API service to be responsive
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/seal-status"
+    method: GET
+    status_code: [200, 429]
+  register: openbao_api_check
+  until: openbao_api_check.status in [200, 429]
+  retries: 25
+  delay: 2
+
+# ------------------------------------------------------------
+# OpenBao Automated Initialization & Bootstrap
+# ------------------------------------------------------------
+- name: Check OpenBao initialization status
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/init"
+    method: GET
+    status_code: 200
+  register: openbao_init_status
+  when: openbao_auto_init | default(true) | bool
+
+- name: Initialize OpenBao if not initialized
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/init"
+    method: POST
+    body_format: json
+    body:
+      secret_shares: "{{ openbao_secret_shares | int }}"
+      secret_threshold: "{{ openbao_secret_threshold | int }}"
+    status_code: 200
+  register: openbao_init_res
+  when:
+    - openbao_auto_init | default(true) | bool
+    - not (openbao_init_status.json.initialized | default(true))
+
+- name: Resolve effective OpenBao unseal keys
+  ansible.builtin.set_fact:
+    effective_unseal_keys: >-
+      {{
+        openbao_init_res.json['keys']
+        if (openbao_init_res.json is defined and 'keys' in openbao_init_res.json)
+        else (openbao_unseal_keys | default([]))
+      }}
+    effective_root_token: >-
+      {{
+        openbao_init_res.json['root_token']
+        if (openbao_init_res.json is defined and 'root_token' in openbao_init_res.json)
+        else ''
+      }}
+
+- name: Ensure local output directory exists on Ansible controller
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/output"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+  when:
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Save OpenBao credentials to local output file
+  ansible.builtin.copy:
+    dest: "{{ playbook_dir }}/output/openbao-credentials.txt"
+    mode: '0600'
+    content: |
+      ============================================================
+      OpenBao Initial Administrator & Unseal Credentials
+      Generated on : {{ ansible_facts['date_time']['iso8601'] | default(ansible_date_time.iso8601) }}
+      ============================================================
+      URL               : https://{{ traefik_openbao_domain }}
+      Initial Root Token: {{ effective_root_token }}
+
+      Secret Shares     : {{ openbao_secret_shares }}
+      Secret Threshold  : {{ openbao_secret_threshold }}
+
+      Unseal Keys:
+      {% for key in effective_unseal_keys %}
+        - Key {{ loop.index }}: {{ key }}
+      {% endfor %}
+
+      ============================================================
+      NOTE: Keep these keys in a safe place (e.g. Password Manager).
+      The unseal key has also been placed in {{ openbao_dir }}/.unseal_keys
+      for automatic unsealing upon service restart.
+      ============================================================
+  delegate_to: localhost
+  become: false
+  when:
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Deploy OpenBao unseal keys file (.unseal_keys)
+  ansible.builtin.template:
+    src: unseal_keys.j2
+    dest: "{{ openbao_dir }}/.unseal_keys"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0600'
+  when: (effective_unseal_keys | default([]) | length) > 0
+
+- name: Trigger automated unseal
+  ansible.builtin.command:
+    cmd: "{{ openbao_dir }}/unseal.sh"
+  become: true
+  become_user: "{{ service_user_name }}"
+  register: unseal_exec
+  changed_when: "'SUCCESS: OpenBao successfully unsealed' in unseal_exec.stdout"
+  when:
+    - (openbao_auto_unseal | default(true) | bool)
+
+
+

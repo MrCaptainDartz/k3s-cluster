@@ -1,5 +1,5 @@
 ---
-# Global Configuration — Infra Services VM (Forgejo + Infisical)
+# Global Configuration — Infra Services VM (Forgejo + OpenBao)
 
 system_timezone_value: "Europe/Paris"
 essential_packages_extra: []
@@ -28,7 +28,7 @@ traefik_http_port: 8000
 traefik_https_port: 8443
 traefik_cert_validity_days: 10950 # 30 years
 traefik_forgejo_domain: "git.example.com"
-traefik_infisical_domain: "infisical.example.com"
+traefik_openbao_domain: "openbao.example.com"
 
 forgejo_enabled: true
 forgejo_version: "16.0.3"
@@ -42,17 +42,23 @@ forgejo_admin_username: "admin"
 forgejo_admin_email: "admin@example.com"
 forgejo_admin_password: ""
 
-infisical_enabled: true
-infisical_version: "latest"
-infisical_port: 8080
-infisical_db_name: "infisical"
-infisical_db_user: "infisical"
-infisical_db_password: ""
-infisical_redis_password: ""
-infisical_encryption_key: ""
-infisical_auth_secret: ""
+# ============================================================
+# OpenBao Stack Configuration
+# ============================================================
+openbao_enabled: true
+openbao_version: "2.6"
+openbao_port: 8200
+openbao_cluster_port: 8201
+openbao_ui: true
+openbao_log_level: "info"
 
-# JWT Token Lifetimes (Production Hardening)
-infisical_jwt_auth_lifetime: "15m"
-infisical_jwt_refresh_lifetime: "24h"
-infisical_jwt_service_lifetime: "1h"
+# OpenBao Automated Bootstrap (Auto-Initialization & Auto-Unseal)
+# On first boot, OpenBao is automatically initialized and unsealed.
+# Credentials (Root Token & Unseal Keys) are saved locally to output/openbao-credentials.txt.
+openbao_auto_init: true
+openbao_secret_shares: 1
+openbao_secret_threshold: 1
+openbao_auto_unseal: true
+openbao_unseal_keys: [] # Optional manual override keys if already existing
+
+

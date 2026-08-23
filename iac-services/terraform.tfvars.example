@@ -27,7 +27,7 @@ vm_machine_type  = "q35"
 vm_scsi_hardware = "virtio-scsi-single"
 vm_disk_iothread = true
 vm_boot_order    = ["scsi0"]
-vm_tags          = ["services", "gitops", "forgejo", "infisical", "opentofu"]
+vm_tags          = ["services", "gitops", "forgejo", "openbao", "opentofu"]
 pool_id          = "Backup-Daily"
 
 # Proxmox boot sequence (Position 1, 60s delay to initialize services before K3s cluster)

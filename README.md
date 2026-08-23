@@ -16,10 +16,10 @@ flowchart TD
         VM0["VM: infra-services (10.20.4.253)"]
         TRF["Traefik v3 (TLS ECDSA P-384 :443 / :80 redirect)"]
         FJ["Forgejo (Git Server + SSH :2222)"]
-        INF["Infisical (Secret Manager)"]
+        BAO["OpenBao 2.6 (Secret Manager & Web UI)"]
         VM0 --> TRF
         TRF -->|Internal services-network| FJ
-        TRF -->|Internal services-network| INF
+        TRF -->|Internal services-network| BAO
     end
 
     subgraph Layer1["Layer 1: K3s Virtual Machines (OpenTofu)"]
@@ -43,16 +43,16 @@ flowchart TD
     Layer1 --> Layer2
     Layer2 --> Layer3
     FJ -.->|Sync Git manifests| ARGO
-    INF -.->|Inject secrets| APPS
+    BAO -.->|Inject secrets| APPS
 ```
 
 ### Layer 0: Core Infrastructure Services (Prerequisite)
 Located in [`iac-services/`](./iac-services/) and [`ansible-services/`](./ansible-services/):
 - Provisions a dedicated standalone VM (`infra-services` at `10.20.4.253`) on Ceph storage (`pool1_ssd`) in Proxmox resource pool `Backup-Daily` with HA replication.
-- Runs **Traefik v3** (HTTPS reverse proxy with 30-year ECDSA P-384 certificate), **Forgejo** (local Git server), and **Infisical** (external secrets manager) using **Podman Rootless** under an unprivileged user without sudo rights (`services`).
-- **Security by Design**: Direct container web ports (`3000`, `8080`) are completely unmapped from the host and strictly isolated inside a private Podman network (`services-network`). UFW performs transparent local NAT redirection (`80 -> 8000`, `443 -> 8443`).
+- Runs **Traefik v3** (HTTPS reverse proxy with 30-year ECDSA P-384 certificate), **Forgejo** (local Git server), and **OpenBao 2.6** (open-source secret manager with Raft storage) using **Podman Rootless** under an unprivileged user without sudo rights (`services`).
+- **Security by Design**: Direct container web ports (`3000`, `8200`) are completely unmapped from the host and strictly isolated inside a private Podman network (`services-network`). UFW performs transparent local NAT redirection (`80 -> 8000`, `443 -> 8443`).
 - **Automated Bootstrap**: Forgejo admin account is automatically created and credentials saved locally to [`ansible-services/output/forgejo-credentials.txt`](./ansible-services/output/forgejo-credentials.txt). Public registrations are disabled.
-- **Production Hardened**: Infisical is hardened according to official standards (SSRF protection, JWT token lifetime reduction, Redis password authentication, and read-only container rootfs with tmpfs).
+- **Production Hardened**: OpenBao is configured with integrated Raft storage, memory isolation (`IPC_LOCK`), unauthenticated telemetry disabled, and container capabilities dropped (`ALL`).
 - **Why?** Having Git and Secrets hosted outside the Kubernetes cluster solves the bootstrap dependency problem and allows disaster recovery without relying on an operational K8s cluster.
 
 ### Layer 1: K3s Node Infrastructure (OpenTofu)
@@ -87,7 +87,7 @@ Located in [`gitops/`](./gitops/):
 ## 🚀 Quick Start Guide
 
 ### Step 0: Deploy Infrastructure Services VM (Prerequisite)
-Deploy the Forgejo, Infisical, and Traefik VM first:
+Deploy the Forgejo, OpenBao, and Traefik VM first:
 
 ```bash
 # 1. Provision the infra-services VM on Proxmox
@@ -95,13 +95,13 @@ cd iac-services/
 cp terraform.tfvars.example terraform.tfvars # Edit if needed
 tofu init && tofu apply
 
-# 2. Configure the OS, Podman Rootless, Traefik v3, Forgejo & Infisical
+# 2. Configure the OS, Podman Rootless, Traefik v3, Forgejo & OpenBao
 cd ../ansible-services/
 ansible-playbook -i inventory/hosts.yml playbook.yml
 ```
 * **Forgejo HTTPS**: `https://git.infra-services.local` (or `https://10.20.4.253` with Host header)
 * **Forgejo Git SSH**: `ssh://git@git.infra-services.local:2222`
-* **Infisical HTTPS**: `https://infisical.infra-services.local`
+* **OpenBao HTTPS**: `https://openbao.infra-services.local`
 * **Admin Credentials**: saved locally in `ansible-services/output/forgejo-credentials.txt`
 
 ### Step 1: Deploy K3s Cluster VMs

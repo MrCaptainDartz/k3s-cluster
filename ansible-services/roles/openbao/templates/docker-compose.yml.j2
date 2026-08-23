@@ -1,0 +1,34 @@
+version: "3.8"
+
+services:
+  openbao:
+    image: {{ openbao_image }}
+    container_name: openbao
+    restart: always
+    command: ["server", "-config=/etc/openbao/config.hcl"]
+    read_only: true
+    environment:
+      - BAO_API_ADDR=https://{{ traefik_openbao_domain }}
+    volumes:
+      - ./config:/etc/openbao:ro,Z,U
+      - ./data:/bao/data:Z,U
+      - ./logs:/bao/logs:Z,U
+    ports:
+      - "127.0.0.1:{{ openbao_port }}:8200"
+    networks:
+      - services-network
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256M
+    logging:
+      driver: "{{ openbao_log_driver }}"
+      options:
+        max-size: "{{ openbao_log_max_size }}"
+        max-file: "{{ openbao_log_max_file }}"
+
+networks:
+  services-network:
+    external: true

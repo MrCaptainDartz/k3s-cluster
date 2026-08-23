@@ -1,6 +1,6 @@
 # Infrastructure as Code — `infra-services` VM (OpenTofu)
 
-Provisions the dedicated standalone **`infra-services`** Virtual Machine on Proxmox VE to host core infrastructure services (**Forgejo**, **Infisical**, **Traefik v3**).
+Provisions the dedicated standalone **`infra-services`** Virtual Machine on Proxmox VE to host core infrastructure services (**Forgejo**, **OpenBao**, **Traefik v3**).
 
 ---
 

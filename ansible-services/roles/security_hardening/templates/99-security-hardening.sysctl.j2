@@ -18,6 +18,9 @@ kernel.sysrq = 0
 kernel.perf_event_paranoid = 3
 net.core.bpf_jit_harden = 2
 
+# Memory & Swap Security (Disable swapping)
+vm.swappiness = 0
+
 # Anti-DoS Network protections
 net.ipv4.tcp_syncookies = 1
 net.ipv4.icmp_ignore_bogus_error_responses = 1
