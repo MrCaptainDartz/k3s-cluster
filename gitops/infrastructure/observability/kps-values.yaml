@@ -84,10 +84,10 @@ grafana:
     annotations:
       cert-manager.io/cluster-issuer: letsencrypt-prod
     hosts:
-      - grafana.captaindartz.org
+      - grafana.$(DOMAIN_NAME)
     tls:
       - hosts:
-          - grafana.captaindartz.org
+          - grafana.$(DOMAIN_NAME)
         secretName: grafana-tls
   # Loki datasource (logs) from the loki chart -> http://loki.monitoring.svc:3100.
   # Prometheus remains the default datasource (kept by the chart).

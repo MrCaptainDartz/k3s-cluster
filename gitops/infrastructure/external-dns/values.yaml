@@ -8,10 +8,10 @@ provider:
       - name: INFOMANIAK_API_TOKEN
         valueFrom:
           secretKeyRef:
-            name: infomaniak-api-token-captaindartz-org
+            name: infomaniak-api-token-cluster-domain
             key: api-token
 domainFilters:
-  - captaindartz.org
+  - $(DOMAIN_NAME)
 policy: sync
 txtOwnerId: external-dns-infomaniak
 sources:

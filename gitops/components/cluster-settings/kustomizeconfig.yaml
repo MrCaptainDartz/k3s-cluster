@@ -13,3 +13,11 @@ varReference:
     kind: Deployment
   - path: spec/ipAllowList/sourceRange
     kind: Middleware
+  - path: spec/rules/host
+    kind: Ingress
+  - path: spec/tls/hosts
+    kind: Ingress
+  - path: spec/acme/email
+    kind: ClusterIssuer
+  - path: spec/acme/solvers/selector/dnsZones
+    kind: ClusterIssuer

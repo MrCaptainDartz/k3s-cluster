@@ -70,8 +70,8 @@ spec:
           port: 53
     # DNS-01 self-check: cert-manager queries the authoritative nameserver of
     # the challenge domain DIRECTLY (not via kube-dns) to verify the TXT record
-    # has propagated. The target IP is arbitrary (the domain's authoritative NS,
-    # e.g. 93.88.255.151 for captaindartz.org), so egress :53 must be allowed to
+    # has propagated. The target IP is arbitrary (whatever the domain's
+    # authoritative NS resolves to), so egress :53 must be allowed to
     # 0.0.0.0/0. Restricting to kube-dns only makes the self-check fail with
     # "read udp <pod>-><auth-ns>:53: connection refused" and the Challenge stalls
     # in `pending` forever.

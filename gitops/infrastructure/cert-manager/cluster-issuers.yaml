@@ -7,13 +7,13 @@ metadata:
 spec:
   acme:
     server: https://acme-staging-v02.api.letsencrypt.org/directory
-    email: "contact@captaindartz.org"
+    email: "contact@$(DOMAIN_NAME)"
     privateKeySecretRef:
       name: letsencrypt-staging-account-key
     solvers:
 #      - selector:
 #          dnsZones:
-#            - captaindartz.org
+#            - example.tld
 #        dns01:
 #          cloudflare:
 #            apiTokenSecretRef:
@@ -40,7 +40,7 @@ spec:
 #                key: applicationConsumerKey
       - selector:
           dnsZones:
-            - captaindartz.org
+            - $(DOMAIN_NAME)
         dns01:
           webhook:
             groupName: acme.infomaniak.com
@@ -59,7 +59,7 @@ metadata:
 spec:
   acme:
     server: https://acme-v02.api.letsencrypt.org/directory
-    email: "contact@captaindartz.org"
+    email: "contact@$(DOMAIN_NAME)"
     privateKeySecretRef:
       name: letsencrypt-prod-account-key
     solvers:
@@ -92,7 +92,7 @@ spec:
 #                key: applicationConsumerKey
       - selector:
           dnsZones:
-            - captaindartz.org
+            - $(DOMAIN_NAME)
         dns01:
           webhook:
             groupName: acme.infomaniak.com

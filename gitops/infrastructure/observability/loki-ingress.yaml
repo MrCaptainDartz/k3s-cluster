@@ -20,7 +20,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: loki.captaindartz.org
+    - host: loki.$(DOMAIN_NAME)
       http:
         paths:
           - path: /loki/api/v1/push
@@ -32,5 +32,6 @@ spec:
                   number: 3100
   tls:
     - hosts:
-        - loki.captaindartz.org
+        - loki.$(DOMAIN_NAME)
       secretName: loki-tls
+
