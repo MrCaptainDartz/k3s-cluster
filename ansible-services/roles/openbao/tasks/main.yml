@@ -160,18 +160,8 @@
 
 - name: Resolve effective OpenBao unseal keys
   ansible.builtin.set_fact:
-    effective_unseal_keys: >-
-      {{
-        openbao_init_res.json['keys']
-        if (openbao_init_res.json is defined and 'keys' in openbao_init_res.json)
-        else (openbao_unseal_keys | default([]))
-      }}
-    effective_root_token: >-
-      {{
-        openbao_init_res.json['root_token']
-        if (openbao_init_res.json is defined and 'root_token' in openbao_init_res.json)
-        else ''
-      }}
+    effective_unseal_keys: "{{ openbao_init_res.json.keys if ('json' in openbao_init_res and 'keys' in openbao_init_res.json) else (openbao_unseal_keys if (openbao_unseal_keys | default([]) | length > 0) else ((lookup('file', playbook_dir + '/output/openbao-credentials.txt', errors='ignore') or lookup('file', role_path + '/../../output/openbao-credentials.txt', errors='ignore')) | regex_findall('Key \\d+:\\s*(\\S+)') | default([], true))) }}"
+    effective_root_token: "{{ openbao_init_res.json.root_token if ('json' in openbao_init_res and 'root_token' in openbao_init_res.json) else (openbao_root_token if (openbao_root_token is defined and openbao_root_token | length > 0) else ((lookup('file', playbook_dir + '/output/openbao-credentials.txt', errors='ignore') or lookup('file', role_path + '/../../output/openbao-credentials.txt', errors='ignore')) | regex_findall('Initial Root Token\\s*:\\s*(\\S+)') | default([''], true) | first)) }}"
 
 - name: Deploy OpenBao unseal keys file (.unseal_keys)
   ansible.builtin.template:
@@ -293,7 +283,7 @@
     - openbao_init_res.json is defined
     - "'root_token' in openbao_init_res.json"
 
-- name: Create OpenBao External Secrets Operator policy (eso-k3s-policy)
+- name: Create or update OpenBao External Secrets Operator policy (eso-k3s-policy)
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/policies/acl/eso-k3s-policy"
     method: POST
@@ -310,12 +300,9 @@
         path "secret/metadata/infra/*" { capabilities = ["read", "list"] }
     status_code: [200, 204]
   when:
-    - openbao_bootstrap_provisioning | default(true) | bool
-    - openbao_init_res is not skipped
-    - openbao_init_res.json is defined
-    - "'root_token' in openbao_init_res.json"
+    - effective_root_token | default('') | length > 0
 
-- name: Create OpenBao Ansible automation policy (ansible-policy)
+- name: Create or update OpenBao Ansible automation policy (ansible-policy)
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/policies/acl/ansible-policy"
     method: POST
@@ -324,16 +311,20 @@
     body_format: json
     body:
       policy: |
+        # Manage KV v2 secrets for infra and k3s
         path "secret/data/infra/*" { capabilities = ["create", "read", "update", "delete"] }
         path "secret/metadata/infra/*" { capabilities = ["read", "list"] }
         path "secret/data/k3s/*" { capabilities = ["create", "read", "update", "delete"] }
         path "secret/metadata/k3s/*" { capabilities = ["read", "list"] }
+
+        # Delegated management of Kubernetes auth engine for K3s
+        path "sys/auth/kubernetes" { capabilities = ["create", "read", "update", "delete", "sudo"] }
+        path "sys/auth/kubernetes/*" { capabilities = ["create", "read", "update", "delete", "sudo"] }
+        path "sys/auth" { capabilities = ["read"] }
+        path "auth/kubernetes/*" { capabilities = ["create", "read", "update", "delete", "list"] }
     status_code: [200, 204]
   when:
-    - openbao_bootstrap_provisioning | default(true) | bool
-    - openbao_init_res is not skipped
-    - openbao_init_res.json is defined
-    - "'root_token' in openbao_init_res.json"
+    - effective_root_token | default('') | length > 0
 
 - name: Enable OpenBao userpass authentication method
   ansible.builtin.uri:
@@ -797,6 +788,21 @@
     - openbao_traefik_cert_res.json is defined
 
 
+- name: Pre-provision K3s secrets into OpenBao KV v2 storage
+  ansible.builtin.include_tasks: provision_k3s_secrets.yml
+  when:
+    - openbao_provision_k3s_secrets | default(false) | bool
+    - (openbao_k3s_secrets | default([]) | length) > 0
+    - effective_root_token | default('') | length > 0
+
+- name: Ensure local output directory exists on Ansible controller
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/output"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+
 - name: Save OpenBao Root CA certificate to local controller output
   ansible.builtin.copy:
     dest: "{{ playbook_dir }}/output/openbao-ca.crt"
@@ -807,18 +813,6 @@
   when:
     - openbao_traefik_cert_res is not skipped
     - openbao_traefik_cert_res.json is defined
-
-- name: Ensure local output directory exists on Ansible controller
-  ansible.builtin.file:
-    path: "{{ playbook_dir }}/output"
-    state: directory
-    mode: '0700'
-  delegate_to: localhost
-  become: false
-  when:
-    - openbao_init_res is not skipped
-    - openbao_init_res.json is defined
-    - "'root_token' in openbao_init_res.json"
 
 - name: Save OpenBao credentials and initial provisioning summary to local output file
   ansible.builtin.copy:

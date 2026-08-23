@@ -60,6 +60,40 @@ On first boot (when OpenBao is uninitialized), the playbook automatically:
 
 ---
 
+---
+
+## 📦 Declarative K3s Secrets Provisioning (OpenBao KV v2)
+
+The `openbao` role supports declarative pre-provisioning of Kubernetes/K3s secrets into OpenBao KV v2 storage (`secret/data/k3s/...`) for consumption by External Secrets Operator (ESO):
+
+- **Disabled by default**: `openbao_provision_k3s_secrets: false` in role defaults ensures no secrets are created unless explicitly configured in your inventory.
+- **Configurable List (`openbao_k3s_secrets`)**: Declare paths and key/value dictionaries in `inventory/group_vars/all.yml`.
+- **Intelligent Auto-Generation & Preservation**:
+  - Keys with explicit values (e.g. `userID: "k8s-rbd"`) are applied directly.
+  - Keys left empty (`""`) are auto-generated with cryptographically secure 24-character random passwords (or numeric digits if defined in `digits_only_keys`).
+  - Existing secrets in OpenBao are preserved across re-runs without rotation or overwriting.
+- **True Idempotency**: Changes are detected prior to writing; OpenBao KV v2 `POST` requests only execute when payload differences exist, preventing version history pollution.
+
+Example in `inventory/group_vars/all.yml`:
+```yaml
+openbao_provision_k3s_secrets: true
+
+openbao_k3s_secrets:
+  - path: "ceph-csi-operator-system/csi-rbd-secret"
+    data:
+      userID: "k8s-rbd"
+      userKey: "" # Auto-generated 24-character random string
+
+  - path: "monitoring/alertmanager-telegram"
+    data:
+      bot-token: ""
+      chat-id: ""
+    digits_only_keys:
+      chat-id: 18 # Auto-generates 18 numeric digits (safe for Alertmanager int64)
+```
+
+---
+
 ## 🌐 Endpoints & Output Files
 
 - **Forgejo HTTPS**: `https://git.infra-services.local`
@@ -71,3 +105,4 @@ On first boot (when OpenBao is uninitialized), the playbook automatically:
 - **Admin Credentials**: Saved automatically to `output/`:
   - `output/forgejo-credentials.txt`: Forgejo admin username & password.
   - `output/openbao-credentials.txt`: Initial Root Token, Unseal Keys, nominative admin account (with TOTP MFA secret key & setup URL for Bitwarden), Ansible AppRole (Role ID & Secret ID), Traefik AppRole, and PKI summary.
+

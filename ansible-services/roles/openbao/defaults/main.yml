@@ -43,4 +43,12 @@ openbao_totp_algorithm: "SHA256"
 openbao_totp_skew: 1
 openbao_totp_max_validation_attempts: 5
 
+# K3s Pre-provisioned Secrets (OpenBao KV v2 on secret/data/k3s/...)
+# By default, secret provisioning is disabled unless configured in inventory (e.g. group_vars/all.yml).
+openbao_provision_k3s_secrets: false
+openbao_k3s_secrets: []
+
+
+
+
 
