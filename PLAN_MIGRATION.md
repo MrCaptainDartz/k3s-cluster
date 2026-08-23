@@ -84,11 +84,13 @@
 
   Dans ansible-services/roles/openbao/tasks/main.yml, enrichir la policy ansible-policy :
 
-    # Gestion des secrets KV v2 pour infra et k3s
+    # Gestion des secrets KV v2 pour infra, k3s et apps
     path "secret/data/infra/*" { capabilities = ["create", "read", "update", "delete"] }
     path "secret/metadata/infra/*" { capabilities = ["read", "list"] }
     path "secret/data/k3s/*" { capabilities = ["create", "read", "update", "delete"] }
     path "secret/metadata/k3s/*" { capabilities = ["read", "list"] }
+    path "secret/data/apps/*" { capabilities = ["create", "read", "update", "delete"] }
+    path "secret/metadata/apps/*" { capabilities = ["read", "list"] }
     
     # Gestion déléguée du moteur d'auth Kubernetes pour K3s
     path "sys/auth/kubernetes" { capabilities = ["create", "read", "update", "delete", "sudo"] }
@@ -104,14 +106,14 @@
     openbao_k3s_secrets: []
 
 
-  Ajouter dans le rôle openbao la création idempotente des 6 secrets dans secret/data/k3s/... :
+  Ajouter dans le rôle openbao la création idempotente des 6 secrets (chemins complets sous secret/data/<path>, préfixés par défaut par `k3s/`) :
 
-  • ceph-csi-operator-system/csi-rbd-secret (userID, userKey)
-  • ceph-csi-operator-system/csi-cephfs-secret (userID, userKey)
-  • cert-manager/infomaniak-api-credentials (api-token)
-  • external-dns/infomaniak-api-token-cluster-domain (api-token)
-  • monitoring/alertmanager-telegram (bot-token, chat-id)
-  • monitoring/grafana-admin-credentials (admin-user, admin-password)
+  • k3s/ceph-csi-operator-system/csi-rbd-secret (userID, userKey)
+  • k3s/ceph-csi-operator-system/csi-cephfs-secret (userID, userKey)
+  • k3s/cert-manager/infomaniak-api-credentials (api-token)
+  • k3s/external-dns/infomaniak-api-token-cluster-domain (api-token)
+  • k3s/monitoring/alertmanager-telegram (bot-token, chat-id)
+  • k3s/monitoring/grafana-admin-credentials (admin-user, admin-password)
   ──────
   ### Phase 2 — ansible-k3s : Nettoyage SOPS & Auto-enregistrement OpenBao
 
@@ -450,13 +452,13 @@
 
   [x] Mettre à jour ansible-policy dans main.yml:320-331 pour inclure les droits sys/auth/kubernetes* et auth/kubernetes/*.
   [x] Ajouter la gestion de openbao_provision_k3s_secrets (désactivé par défaut) et openbao_k3s_secrets (liste configurable avec auto-génération et digits_only_keys) dans roles/openbao/defaults/main.yml et inventory/group_vars/all.yml.
-  [x] Ajouter les tâches de pré-peuplement dynamiques dans le rôle openbao pour injecter dans secret/data/k3s/... :
-      • ceph-csi-operator-system/csi-rbd-secret (userID, userKey)
-      • ceph-csi-operator-system/csi-cephfs-secret (userID, userKey)
-      • cert-manager/infomaniak-api-credentials (api-token)
-      • external-dns/infomaniak-api-token-cluster-domain (api-token)
-      • monitoring/alertmanager-telegram (bot-token, chat-id)
-      • monitoring/grafana-admin-credentials (admin-user, admin-password généré ou défini)
+  [x] Ajouter les tâches de pré-peuplement dynamiques dans le rôle openbao pour injecter dans secret/data/<path> (par défaut sous `k3s/`) :
+      • k3s/ceph-csi-operator-system/csi-rbd-secret (userID, userKey)
+      • k3s/ceph-csi-operator-system/csi-cephfs-secret (userID, userKey)
+      • k3s/cert-manager/infomaniak-api-credentials (api-token)
+      • k3s/external-dns/infomaniak-api-token-cluster-domain (api-token)
+      • k3s/monitoring/alertmanager-telegram (bot-token, chat-id)
+      • k3s/monitoring/grafana-admin-credentials (admin-user, admin-password généré ou défini)
   [x] Mettre à jour ansible-services/inventory/group_vars/all.yml.example avec les variables exemples correspondantes.
   [x] Exécuter playbook.yml et vérifier que les 6 chemins secret/data/k3s/* sont lisibles via l'UI/API OpenBao.
   ──────
