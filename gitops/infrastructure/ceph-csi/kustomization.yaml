@@ -12,4 +12,4 @@ resources:
   - storageclasses.yaml
   - network-policies.yaml
   - volumesnapshot-classes.yaml
-  - ceph-secrets.sops.yaml
+  - ceph-secrets-externalsecret.yaml

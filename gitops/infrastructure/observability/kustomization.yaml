@@ -32,8 +32,8 @@ helmCharts:
     valuesFile: node-exporter-values.yaml
 
 resources:
-  - alertmanager-config.sops.yaml
-  - grafana-admin-credentials.sops.yaml
+  - alertmanager-externalsecret.yaml
+  - grafana-admin-externalsecret.yaml
   - monitors.yaml
   - network-policies.yaml
   - loki-ingress.yaml

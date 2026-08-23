@@ -7,9 +7,9 @@ resources:
   - ceph-csi.yaml
   - cert-manager.yaml
   - external-dns.yaml
+  - external-secrets.yaml
   - external-snapshotter.yaml
   - kured.yaml
   - nfs-csi.yaml
   - observability.yaml
   - smb-csi.yaml
-  - sops-providers.yaml

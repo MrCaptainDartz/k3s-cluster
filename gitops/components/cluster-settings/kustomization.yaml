@@ -42,6 +42,13 @@ vars:
       apiVersion: v1
     fieldref:
       fieldpath: data.servicesSubnet
+  - name: PODS_SUBNET
+    objref:
+      kind: ConfigMap
+      name: cluster-settings
+      apiVersion: v1
+    fieldref:
+      fieldpath: data.podsSubnet
   - name: DOMAIN_NAME
     objref:
       kind: ConfigMap

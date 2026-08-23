@@ -11,4 +11,6 @@ data:
   cephSubnet: 10.20.3.0/24
   nodesSubnet: 10.20.4.0/24
   servicesSubnet: 10.20.4.0/24
+  # K3s pod CIDR (--cluster-cidr), defined in ansible-k3s inventory/group_vars/all.yml (cluster_cidr).
+  podsSubnet: 10.42.0.0/16
   domainName: captaindartz.org

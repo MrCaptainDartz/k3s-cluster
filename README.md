@@ -13,7 +13,7 @@ The architecture is divided into decoupled layers to ensure maximum reliability 
 ```mermaid
 flowchart TD
     subgraph Layer0["Layer 0: Core Infra Services (Prerequisite)"]
-        VM0["VM: infra-services (10.20.4.253)"]
+        VM0["VM: infra-services (192.168.1.253)"]
         TRF["Traefik v3 (TLS ECDSA P-384 :443 / :80 redirect)"]
         FJ["Forgejo (Git Server + SSH :2222)"]
         BAO["OpenBao 2.6 (Secret Manager & Web UI)"]
@@ -23,32 +23,34 @@ flowchart TD
     end
 
     subgraph Layer1["Layer 1: K3s Virtual Machines (OpenTofu)"]
-        HC1["Node 1: k3s-dev-hc1 (10.20.4.1)"]
-        HC2["Node 2: k3s-dev-hc2 (10.20.4.2)"]
-        HC3["Node 3: k3s-dev-hc3 (10.20.4.3)"]
+        HC1["Node 1: k3s-dev-hc1 (192.168.1.11)"]
+        HC2["Node 2: k3s-dev-hc2 (192.168.1.12)"]
+        HC3["Node 3: k3s-dev-hc3 (192.168.1.13)"]
     end
 
     subgraph Layer2["Layer 2: Cluster Bootstrap (Ansible)"]
         K3S["HA K3s Control Plane + etcd"]
-        VIP["kube-vip (API VIP 10.20.4.10)"]
+        VIP["kube-vip (API VIP 192.168.1.10)"]
         MLB["MetalLB (LoadBalancer)"]
         ARGO["ArgoCD GitOps Controller"]
     end
 
     subgraph Layer3["Layer 3: GitOps Workflows (ArgoCD)"]
+        ESO["External Secrets Operator (ESO)"]
         APPS["Cert-Manager, ExternalDNS, Ceph CSI, Observability, etc."]
+        ESO -->|Materialize native Secrets| APPS
     end
 
     Layer0 -->|Git repo source & Secrets| Layer2
     Layer1 --> Layer2
     Layer2 --> Layer3
     FJ -.->|Sync Git manifests| ARGO
-    BAO -.->|Inject secrets| APPS
+    BAO -.->|Fetch secrets via JWT| ESO
 ```
 
 ### Layer 0: Core Infrastructure Services (Prerequisite)
 Located in [`iac-services/`](./iac-services/) and [`ansible-services/`](./ansible-services/):
-- Provisions a dedicated standalone VM (`infra-services` at `10.20.4.253`) on Ceph storage (`pool1_ssd`) in Proxmox resource pool `Backup-Daily` with HA replication.
+- Provisions a dedicated standalone VM (`infra-services` at `192.168.1.253`) on Ceph storage (`pool1_ssd`) in Proxmox resource pool `Backup-Daily` with HA replication.
 - Runs **Traefik v3** (HTTPS reverse proxy with 90-day ECDSA P-384 certificates auto-renewed by OpenBao PKI), **Forgejo** (local Git server), **OpenBao 2.6** (open-source secret manager with Raft storage & internal PKI), **Prometheus Node Exporter** (`:9100/metrics`), and **Grafana Alloy** (systemd journal & audit log streaming) using **Podman Rootless** under an unprivileged user without sudo rights (`services`).
 - **Security by Design**: Direct container web ports (`3000`, `8200`) are completely unmapped from the host and strictly isolated inside a private Podman network (`services-network`). UFW performs transparent local NAT redirection (`80 -> 8000`, `443 -> 8443`).
 - **Automated Bootstrap & Secrets Provisioning**:
@@ -66,11 +68,11 @@ Located in [`iac-k3s/`](./iac-k3s/):
 
 ### Layer 2: Cluster Bootstrap (Ansible)
 Located in [`ansible-k3s/`](./ansible-k3s/):
-- Bootstraps the 3-node HA K3s cluster, kube-vip (API VIP), MetalLB, Traefik, SOPS Operator, and ArgoCD.
+- Bootstraps the 3-node HA K3s cluster, kube-vip (API VIP), MetalLB, Traefik, ArgoCD, and registers the cluster against OpenBao (`auth/kubernetes` engine for the External Secrets Operator).
 
-### Layer 3: GitOps Engine (ArgoCD)
+### Layer 3: GitOps Workflows (ArgoCD)
 Located in [`gitops/`](./gitops/):
-- Continuously synchronizes add-ons and cluster infrastructure from your Forgejo Git repository (app-of-apps pattern).
+- Continuously synchronizes add-ons and cluster infrastructure from your Forgejo Git repository (app-of-apps pattern), including External Secrets Operator (sync-wave -10), CSI storage drivers, cert-manager, external-dns, and observability.
 
 ---
 
@@ -80,12 +82,12 @@ Located in [`gitops/`](./gitops/):
 - **Functional Cluster**: Proxmox VE cluster (v8+ recommended).
 - **Storage**: Ceph cluster running on Proxmox nodes (`pool1_ssd` pool for HA VM storage).
 - **Resource Pool**: `Backup-Daily` pool for automated daily backup jobs.
-- **Network**: VLAN 2004 (`10.20.4.0/24`) for LAN/Management and Ceph network (`10.20.3.0/24`).
+- **Network**: LAN/Management network (`192.168.1.0/24`) and Ceph network (`192.168.2.0/24`).
 
 ### 💻 Control Machine
 - **OpenTofu** (>= 1.11.0) or Terraform
 - **Ansible** (>= 2.15)
-- **kubectl**, **kustomize**, **sops**, **age**
+- **kubectl**, **kustomize**
 
 ---
 
@@ -124,7 +126,7 @@ cd ../ansible-k3s/
 ansible-galaxy install -r requirements.yml
 cp inventory/hosts.yml.example inventory/hosts.yml
 cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml # Edit configs!
-ansible-playbook -i inventory/hosts.yml site.yml
+ansible-playbook -i inventory/hosts.yml playbook.yml
 ```
 
 ### Step 3: ArgoCD GitOps Takes Over

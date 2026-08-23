@@ -1,0 +1,13 @@
+# Single replica: small cluster, leader election enabled by default.
+replicaCount: 1
+
+# SA name must match OpenBao role eso-k3s bound_service_account_names.
+serviceAccount:
+  name: external-secrets
+
+# Prometheus scraping via ServiceMonitor (:8080).
+metrics:
+  service:
+    enabled: true
+serviceMonitor:
+  enabled: true

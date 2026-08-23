@@ -1,23 +1,12 @@
-# kube-prometheus-stack values. Migrated from the ansible template
-# 60-kube-prometheus-stack.yml.j2 (commit 0fd1aec, pre-gitops): restores the control-
-# plane metrics endpoints (kubeEtcd/kubeControllerManager/kubeScheduler/kubeProxy), the
-# Prometheus storage PVC, Grafana persistence + Loki datasource, and moves the
-# Alertmanager config (incl. the Telegram receiver bot token) into a SopsSecret so the
-# token is encrypted at rest instead of plaintext here.
+# kube-prometheus-stack values.
+# Scrapes control-plane metrics, configures PVC storage, Loki datasource,
+# and loads Alertmanager / Grafana credentials from ExternalSecrets (OpenBao).
 crds:
   enabled: true
 nodeExporter:
-  enabled: false   # separate prometheus-node-exporter chart deployed in observability-host
+  enabled: false   # deployed separately in observability-host
 
-# K3s runs these control-plane components in-process and binds their metrics servers to
-# 127.0.0.1 by default. The k3s_server flags in ansible-k3s group_vars (bind-address=
-# 0.0.0.0, kube-proxy metrics-bind-address=0.0.0.0, etcd-expose-metrics) expose them by IP
-# so Prometheus can scrape the 3 control planes. KPS default ports/schemes match k3s:
-# etcd HTTP:2381, kubeControllerManager HTTPS:10257, kubeScheduler HTTPS:10259
-# (self-signed -> the KPS default insecureSkipVerify; no secret mounts), kubeProxy
-# HTTP:10249. This dev cluster has only the 3 control-plane nodes (no workers), so
-# kubeProxy scrapes the same 3 IPs. IPs are hardcoded here because kustomize $(VAR) does
-# not reliably substitute into Helm-rendered values (no precedent in this repo).
+# Control-plane metrics endpoints (K3s binds them to 0.0.0.0 via group_vars flags).
 kubeEtcd:
   enabled: true
   endpoints:
@@ -61,11 +50,8 @@ prometheus:
             requests:
               storage: 20Gi
 
-# Alertmanager: the config (global + route + receivers incl. the Telegram receiver with
-# its bot token) lives in SopsSecret alertmanager-config.sops.yaml, materialized as Secret
-# `alertmanager-config` (key alertmanager.yaml). useExistingSecret makes the chart mount
-# that Secret and ignore alertmanager.config / templateFiles — the bot token is never in
-# plaintext helm values.
+# Alertmanager config loaded from ExternalSecret `alertmanager-config`
+# (mounted via useExistingSecret so credentials stay out of plaintext values).
 alertmanager:
   alertmanagerSpec:
     useExistingSecret: true

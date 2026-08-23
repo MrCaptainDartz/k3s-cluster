@@ -11,33 +11,6 @@ spec:
     privateKeySecretRef:
       name: letsencrypt-staging-account-key
     solvers:
-#      - selector:
-#          dnsZones:
-#            - example.tld
-#        dns01:
-#          cloudflare:
-#            apiTokenSecretRef:
-#              name: cloudflare-api-token-main
-#              key: token
-#      - selector:
-#          dnsZones:
-#            - other.tld
-#        dns01:
-#          webhook:
-#            groupName: acme.myhomelab.example
-#            solverName: ovh
-#            config:
-#              endpoint: ovh-eu
-#              authenticationMethod: application
-#              applicationKeyRef:
-#                name: ovh-creds-other
-#                key: applicationKey
-#              applicationSecretRef:
-#                name: ovh-creds-other
-#                key: applicationSecret
-#              applicationConsumerKeyRef:
-#                name: ovh-creds-other
-#                key: applicationConsumerKey
       - selector:
           dnsZones:
             - $(DOMAIN_NAME)
@@ -63,33 +36,6 @@ spec:
     privateKeySecretRef:
       name: letsencrypt-prod-account-key
     solvers:
-#      - selector:
-#          dnsZones:
-#            - example.tld
-#        dns01:
-#          cloudflare:
-#            apiTokenSecretRef:
-#              name: cloudflare-api-token-main
-#              key: token
-#      - selector:
-#          dnsZones:
-#            - other.tld
-#        dns01:
-#          webhook:
-#            groupName: acme.myhomelab.example
-#            solverName: ovh
-#            config:
-#              endpoint: ovh-eu
-#              authenticationMethod: application
-#              applicationKeyRef:
-#                name: ovh-creds-other
-#                key: applicationKey
-#              applicationSecretRef:
-#                name: ovh-creds-other
-#                key: applicationSecret
-#              applicationConsumerKeyRef:
-#                name: ovh-creds-other
-#                key: applicationConsumerKey
       - selector:
           dnsZones:
             - $(DOMAIN_NAME)

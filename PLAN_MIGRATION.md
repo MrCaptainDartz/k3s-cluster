@@ -10,13 +10,13 @@
   • External Secrets Operator (ESO) déployé par ArgoCD en sync-wave -10 (remplace sops-providers).
   • Authentification Kubernetes (auth/kubernetes) : ESO s'authentifie auprès d'OpenBao via le jeton JWT
   court de son ServiceAccount natif.
-  • Moindre Privilège (Zéro Root Token) : le playbook ansible-k3s/site.yml s'authentifie auprès
+  • Moindre Privilège (Zéro Root Token) : le playbook ansible-k3s/playbook.yml s'authentifie auprès
   d'OpenBao via l'AppRole ansible (avec droits délégués sur auth/kubernetes) pour configurer la liaison
   K3s ↔ OpenBao.
   • Cycle de vie découplé & Secrets pérennes :
       • ansible-services héberge les secrets de manière persistante dans OpenBao KV.
       • Le cluster K3s est éphémère et s'auto-enregistre auprès d'OpenBao à la fin de son déploiement
-      (ansible-k3s site.yml).
+      (ansible-k3s playbook.yml).
   ──────
   ## 2. Décisions Techniques & Ordonnancement
   ┌───────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -39,7 +39,7 @@
                                                       │
                                  1. Auto-enregistrement│  2. Récupération des secrets
                                     via AppRole       │     via K8s Auth (JWT ESO)
-                                    (site.yml)        │
+                                    (playbook.yml)    │
   ┌─────────────────────────────────────────────────┴─────────────────────────────────────────────────┐
     │                                            CLUSTER K3S
   │
@@ -128,14 +128,16 @@
 
   #### 2.2 Variables OpenBao dans inventory/group_vars/all.yml
 
+   Les identifiants AppRole sont copiés directement (valeurs réelles dans all.yml — gitignored —
+  issues d'ansible-services/output/openbao-credentials.txt, placeholders dans all.yml.example). Le
+  credentials.txt n'est pas référencé par lookup pour éviter une dépendance fichier inter-projets.
+
     openbao_url: "https://openbao.infra-services.local"
-    openbao_approle_role_id: "{{ lookup('file', playbook_dir + '/../ansible-services/output/openbao-
-  credentials.txt') | regex_search('Role ID\\s*:\\s*([^\\s]+)', '\\1') | first }}"
-    openbao_approle_secret_id: "{{ lookup('file', playbook_dir + '/../ansible-services/output/openbao-
-  credentials.txt') | regex_search('Secret ID\\s*:\\s*([^\\s]+)', '\\1') | first }}"
+    openbao_approle_role_id: "<Role ID depuis ansible-services/output/openbao-credentials.txt>"
+    openbao_approle_secret_id: "<Secret ID depuis ansible-services/output/openbao-credentials.txt>"
     openbao_ca_cert_path: "{{ playbook_dir }}/../ansible-services/output/openbao-ca.crt"
 
-  #### 2.3 Post-tasks dans ansible-k3s/site.yml (sur k3s_cluster[0])
+  #### 2.3 Tâches dans ansible-k3s/playbook.yml (rôle openbao_registration sur k3s_cluster[0])
 
         # 1. Déploiement du ServiceAccount vault-reviewer sur K3s
         - name: Deploy vault-reviewer ServiceAccount, Secret and RBAC on K3s
@@ -268,7 +270,7 @@
               bound_service_account_names: ["external-secrets"]
               bound_service_account_namespaces: ["external-secrets"]
               token_policies: ["eso-k3s-policy", "default"]
-              audiences: ["https://kubernetes.default.svc.cluster.local"]
+              audience: "https://kubernetes.default.svc.cluster.local"
               token_ttl: "1h"
             status_code: [200, 204]
           delegate_to: localhost
@@ -320,7 +322,7 @@
     helmCharts:
       - name: external-secrets
         repo: https://charts.external-secrets.io
-        version: 0.14.3
+        version: 2.9.0
         releaseName: external-secrets
         namespace: external-secrets
         includeCRDs: true
@@ -464,43 +466,51 @@
   ──────
   ### ☑️ Checklist 2 — ansible-k3s : Nettoyage SOPS & Auto-enregistrement via AppRole
 
-  [ ] Supprimer 08-sops-operator.yml.j2.
-  [ ] Mettre à jour inventory/group_vars/all.yml et all.yml.example :
+  [x] Supprimer 08-sops-operator.yml.j2.
+  [x] Mettre à jour inventory/group_vars/all.yml et all.yml.example :
       • Retirer 08-sops-operator.yml.j2 de k3s_server_manifests_templates.
       • Retirer la variable age_private_key.
-      • Ajouter openbao_url, openbao_approle_role_id, openbao_approle_secret_id, openbao_ca_cert_path.
-  [ ] Supprimer les 2 NetworkPolicies secrets-system dans 05-network-policies.yml.j2:182-221.
-  [ ] Ajouter le namespace external-secrets (PSS enforce: restricted) dans 07-pod-security.yml.j2.
-  [ ] **Ajouter dans les post_tasks de site.yml** :
+      • Ajouter openbao_url, openbao_approle_role_id, openbao_approle_secret_id, openbao_ca_cert_path
+      (valeurs réelles copiées en clair dans all.yml — gitignored — placeholders dans .example).
+  [x] Supprimer les 2 NetworkPolicies secrets-system dans 05-network-policies.yml.j2:182-221.
+  [x] Ajouter le namespace external-secrets (PSS enforce: restricted) dans 07-pod-security.yml.j2.
+  [x] **Ajouter dans le rôle openbao_registration (exécuté par playbook.yml)** :
       • Création sur K3s du ServiceAccount vault-reviewer + Secret token + ClusterRoleBinding
-      system:auth-delegator.
-      • Extraction du reviewer_jwt et du server-ca.crt.
-      • Login auprès d'OpenBao via AppRole ansible (POST /v1/auth/approle/login).
+      system:auth-delegator (via template 08-vault-reviewer.yml.j2 dans les manifests).
+      • Extraction du reviewer_jwt (avec retries, peuplement asynchrone) et du server-ca.crt.
+      • Login auprès d'OpenBao via AppRole ansible (POST /v1/auth/approle/login, no_log).
       • Vérification d'idempotence (GET /v1/sys/auth), activation de auth/kubernetes, configuration de
       auth/kubernetes/config et création du rôle eso-k3s via le token AppRole.
+      ⚠ Correction par rapport au plan initial : champ `audience` au singulier (string) — `audiences`
+      est ignoré silencieusement par l'API et casserait le TokenReview.
 
   ──────
   ### ☑️ Checklist 3 — gitops : Déploiement ESO & ExternalSecrets
 
-  [ ] Supprimer sops-providers.yaml et le dossier gitops/infrastructure/sops-providers/.
-  [ ] Mettre à jour kustomization.yaml:15 (retirer sops-providers.yaml, ajouter external-secrets.yaml).
-  [ ] Créer l'Application ArgoCD gitops/bootstrap/apps/external-secrets.yaml (wave -10,
+  [x] Supprimer sops-providers.yaml et le dossier gitops/infrastructure/sops-providers/.
+  [x] Mettre à jour kustomization.yaml:15 (retirer sops-providers.yaml, ajouter external-secrets.yaml).
+  [x] Créer l'Application ArgoCD gitops/bootstrap/apps/external-secrets.yaml (wave -10,
   CreateNamespace=false).
-  [ ] Créer le module gitops/infrastructure/external-secrets/ :
-      • kustomization.yaml (Helm chart external-secrets avec includeCRDs: true).
+  [x] Créer le module gitops/infrastructure/external-secrets/ :
+      • kustomization.yaml (Helm chart external-secrets 2.9.0 — et non 0.14.3 — avec includeCRDs: true).
       • values.yaml (serviceAccount.name: external-secrets, metrics / ServiceMonitor activés).
       • cluster-store.yaml (ClusterSecretStore openbao avec caBundle public et audience
       https://kubernetes.default.svc.cluster.local).
-      • network-policies.yaml (règles de flux réseau strictes).
-  [ ] Remplacer les .sops.yaml par les ExternalSecret dans ceph-csi, cert-manager, external-dns et
+      • network-policies.yaml (règles de flux réseau strictes ; webhook :10250 depuis NODES_SUBNET et
+      PODS_SUBNET — nouvelle var cluster-settings — car 3 apiservers HA host-gw : source variable).
+  [x] Remplacer les .sops.yaml par les ExternalSecret dans ceph-csi, cert-manager, external-dns et
   observability (avec templating pour alertmanager-config).
-  [ ] Nettoyer les résidus SOPS : supprimer gitops/.sops.yaml et les fichiers *.sops.yaml.example.
+      • Suppression complète de cloudflare et ovh : dns-credentials.sops.yaml, blocs solvers commentés
+      dans cluster-issuers.yaml, helmChart cert-manager-webhook-ovh commenté.
+  [x] Nettoyer les résidus SOPS : supprimer gitops/.sops.yaml et les fichiers *.sops.yaml.example.
+  [x] Documentation alignée (README racine, ansible-k3s/README.md, gitops/README.md, commentaires
+  kps-values.yaml) — avancée par rapport à la checklist 4/étape 5.
   ──────
   ### ☑️ Checklist 4 — Déploiement & Validation End-to-End
 
   [ ] Étape 1 : Lancer ansible-services/playbook.yml → vérifier le peuplement KV dans OpenBao.
   [ ] Étape 2 : Lancer iac-k3s (provisioning des VMs K3s).
-  [ ] Étape 3 : Lancer ansible-k3s/site.yml → valider le déploiement K3s et l'auto-enregistrement
+  [ ] Étape 3 : Lancer ansible-k3s/playbook.yml → valider le déploiement K3s et l'auto-enregistrement
   OpenBao via AppRole.
   [ ] Étape 4 : Vérifier ArgoCD et ESO :
       • kubectl get clustersecretstore openbao → statut Valid.

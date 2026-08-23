@@ -1,0 +1,118 @@
+---
+# OpenBao auto-registration: configures auth/kubernetes so ESO can fetch secrets.
+# The 'ansible' AppRole (provisioned by ansible-services) is least-privilege: its policy
+# only delegates the auth/kubernetes engine, it cannot create or read KV secrets.
+
+# Wait for the token controller to populate the Secret asynchronously.
+- name: Retrieve vault-reviewer JWT token
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/k3s
+      - kubectl
+      - get
+      - secret
+      - vault-reviewer-token
+      - -n
+      - kube-system
+      - -o
+      - jsonpath={.data.token}
+  register: reviewer_token_b64
+  when: inventory_hostname == (groups['k3s_cluster'] | first)
+  changed_when: false
+  no_log: true
+  become: true
+  retries: 20
+  delay: 3
+  until: reviewer_token_b64.stdout | length > 0
+
+- name: Read K3s server TLS CA certificate
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/tls/server-ca.crt
+  register: k3s_server_ca
+  when: inventory_hostname == (groups['k3s_cluster'] | first)
+  become: true
+
+- name: Authenticate to OpenBao via AppRole
+  ansible.builtin.uri:
+    url: "{{ openbao_url }}/v1/auth/approle/login"
+    method: POST
+    ca_path: "{{ openbao_ca_cert_path }}"
+    body_format: json
+    body:
+      role_id: "{{ openbao_approle_role_id }}"
+      secret_id: "{{ openbao_approle_secret_id }}"
+    status_code: 200
+  register: openbao_login
+  delegate_to: localhost
+  run_once: true
+  when: inventory_hostname == (groups['k3s_cluster'] | first)
+  no_log: true
+
+- name: Check enabled auth methods in OpenBao
+  ansible.builtin.uri:
+    url: "{{ openbao_url }}/v1/sys/auth"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ openbao_login.json.auth.client_token }}"
+    ca_path: "{{ openbao_ca_cert_path }}"
+    status_code: 200
+  register: openbao_auth_methods
+  delegate_to: localhost
+  run_once: true
+  when: inventory_hostname == (groups['k3s_cluster'] | first)
+
+- name: Enable auth/kubernetes in OpenBao if not enabled
+  ansible.builtin.uri:
+    url: "{{ openbao_url }}/v1/sys/auth/kubernetes"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ openbao_login.json.auth.client_token }}"
+    ca_path: "{{ openbao_ca_cert_path }}"
+    body_format: json
+    body:
+      type: "kubernetes"
+      description: "Kubernetes auth for K3s cluster"
+    status_code: [200, 204]
+  delegate_to: localhost
+  run_once: true
+  when:
+    - inventory_hostname == (groups['k3s_cluster'] | first)
+    - "'kubernetes/' not in (openbao_auth_methods.json.data | default(openbao_auth_methods.json))"
+
+# The reviewer JWT travels inside this request body — keep it out of the play logs.
+- name: Configure Kubernetes auth engine in OpenBao
+  ansible.builtin.uri:
+    url: "{{ openbao_url }}/v1/auth/kubernetes/config"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ openbao_login.json.auth.client_token }}"
+    ca_path: "{{ openbao_ca_cert_path }}"
+    body_format: json
+    body:
+      kubernetes_host: "https://{{ k3s_vip }}:{{ k3s_api_port }}"
+      kubernetes_ca_cert: "{{ k3s_server_ca.content | b64decode }}"
+      token_reviewer_jwt: "{{ reviewer_token_b64.stdout | b64decode }}"
+    status_code: [200, 204]
+  delegate_to: localhost
+  run_once: true
+  when: inventory_hostname == (groups['k3s_cluster'] | first)
+  no_log: true
+
+- name: Create or update eso-k3s role in OpenBao
+  ansible.builtin.uri:
+    url: "{{ openbao_url }}/v1/auth/kubernetes/role/eso-k3s"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ openbao_login.json.auth.client_token }}"
+    ca_path: "{{ openbao_ca_cert_path }}"
+    body_format: json
+    body:
+      bound_service_account_names: ["external-secrets"]
+      bound_service_account_namespaces: ["external-secrets"]
+      token_policies: ["eso-k3s-policy", "default"]
+      audience: "https://kubernetes.default.svc.cluster.local"
+      token_ttl: "1h"
+    status_code: [200, 204]
+  delegate_to: localhost
+  run_once: true
+  when: inventory_hostname == (groups['k3s_cluster'] | first)

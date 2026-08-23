@@ -23,27 +23,17 @@ helmCharts:
     namespace: cert-manager
     includeCRDs: true
     valuesFile: values.yaml
-#  - name: cert-manager-webhook-ovh
-#    repo: https://aureq.github.io/cert-manager-webhook-ovh
-#    version: 0.9.14
-#    releaseName: cert-manager-webhook-ovh
-#    namespace: cert-manager
-#    valuesInline:
-#      groupName: acme.myhomelab.example
-#      certManager:
-#        namespace: cert-manager
-#        serviceAccountName: cert-manager
 
 resources:
   - https://github.com/Infomaniak/cert-manager-webhook-infomaniak/releases/download/v0.3.1/rendered-manifest.yaml
-  - dns-credentials-infomaniak.sops.yaml
+  - infomaniak-externalsecret.yaml
   - cluster-issuers.yaml
   - network-policies.yaml
   - network-policies-infomaniak.yaml
 # Sync-wave ordering for the Infomaniak webhook bootstrap, which has a strict
 # dependency chain that ArgoCD must respect (each wave waits for the previous
 # one to be Healthy before applying the next):
-#   wave 0: cert-manager chart (controller, CRDs, RBAC) + SopsSecret token
+#   wave 0: cert-manager chart (controller, CRDs, RBAC) + ExternalSecret token
 #   wave 1: cert-manager.io Issuers/Certificates (selfsign -> CA -> webhook-tls)
 #           and the Let's Encrypt ClusterIssuers (ACME account registration only
 #           needs egress to LE, not the webhook)

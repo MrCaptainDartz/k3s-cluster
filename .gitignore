@@ -55,7 +55,7 @@ _bmad-output/
 *.credentials*
 
 # Ignore ansible-galaxy downloaded roles (installed locally via requirements)
-ansible-k3s/roles/
+ansible-k3s/roles/xanmanning.k3s/
 
 ## OS & Editors ##
 .DS_Store

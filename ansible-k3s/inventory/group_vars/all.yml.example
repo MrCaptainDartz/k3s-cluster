@@ -48,7 +48,7 @@ k3s_server:
   kube-proxy-arg:
     - "metrics-bind-address=0.0.0.0"
   # kube-apiserver audit logging (gated on audit_enabled). Empty list when disabled -> no arg passed.
-  # The policy file is dropped by a site.yml pre_task BEFORE the role restarts the apiserver.
+  # The policy file is deployed by the node_prep role BEFORE the K3s server starts.
   # Audit logs are shipped to Loki by Alloy (deployed via GitOps in gitops/infrastructure/observability).
   kube-apiserver-arg: "{{ audit_enabled | bool | ternary(audit_apiserver_args, []) }}"
 
@@ -70,7 +70,7 @@ audit_apiserver_args:
   - "audit-log-maxsize={{ audit_log_maxsize }}"
 
 # CoreDNS — HA replica count
-# Desired CoreDNS replica count (asserted via post_tasks since K3s doesn't manage it).
+# Desired CoreDNS replica count (asserted via cluster_post role since K3s doesn't manage it).
 coredns_replicas: 3
 
 # kube-vip — Control Plane Virtual IP
@@ -117,16 +117,12 @@ traefik_access_log_buffering_size: 100    # batch N entries before flush (fewer 
 
 gitops_root_app_enabled: true
 
-# GitOps Secrets (Age Key & ArgoCD Repo)
+# GitOps (ArgoCD repo bootstrap)
 
 # ArgoCD Installation
 argocd_helm_repo: "https://argoproj.github.io/argo-helm"
 argocd_helm_version: "10.2.1"
 argocd_domain: "argocd.yourdomain.com"
-
-# Age private key for SOPS Operator decryption (SECRET)
-# Generate with: age-keygen -o age.key
-age_private_key: "AGE-SECRET-KEY-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 
 # SSH Deploy Key or Token for ArgoCD to access the private GitOps repository (SECRET)
 # TODO: Create a deploy key on your GitHub/GitLab and place the private key below.
@@ -136,6 +132,15 @@ argocd_git_deploy_key: |
   b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
   ...
   -----END OPENSSH PRIVATE KEY-----
+
+# OpenBao — Cluster auto-registration (ESO / PLAN_MIGRATION.md phase 2)
+# The 'ansible' AppRole ONLY configures the auth/kubernetes engine (ESO backend).
+# It never creates/writes KV secrets — those are provisioned by ansible-services.
+openbao_url: "https://openbao.infra-services.local"
+# From ansible-services output/openbao-credentials.txt (Ansible Automation AppRole)
+openbao_approle_role_id: "00000000-0000-0000-0000-000000000000"
+openbao_approle_secret_id: "REPLACE_WITH_APPROLE_SECRET_ID"
+openbao_ca_cert_path: "{{ playbook_dir }}/../ansible-services/output/openbao-ca.crt"
 
 # K3s — Auto-deployed Manifests
 
@@ -152,6 +157,6 @@ k3s_server_manifests_templates:
   - 05-network-policies.yml.j2
   - 06-traefik-config.yml.j2
   - 07-pod-security.yml.j2
-  - 08-sops-operator.yml.j2
+  - 08-vault-reviewer.yml.j2
   - 09-argocd.yml.j2
   - 10-coredns-pdb.yml.j2

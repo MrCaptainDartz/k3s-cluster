@@ -1,0 +1,127 @@
+---
+# Assert CoreDNS replica count (K3s addon no longer sets spec.replicas since v1.25.5).
+- name: Wait for CoreDNS Deployment to exist
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/k3s
+      - kubectl
+      - get
+      - deploy
+      - coredns
+      - -n
+      - kube-system
+  changed_when: false
+  register: coredns_exists
+  retries: 30
+  delay: 3
+  until: coredns_exists.rc == 0
+  when: inventory_hostname == (groups['k3s_cluster'] | first)
+  become: true
+
+- name: Read current CoreDNS replica count
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/k3s
+      - kubectl
+      - get
+      - deploy
+      - coredns
+      - -n
+      - kube-system
+      - -o
+      - jsonpath={.spec.replicas}
+  changed_when: false
+  register: coredns_current_replicas
+  when: inventory_hostname == (groups['k3s_cluster'] | first)
+  become: true
+
+- name: Scale CoreDNS to {{ coredns_replicas }}
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/k3s
+      - kubectl
+      - scale
+      - deploy
+      - coredns
+      - -n
+      - kube-system
+      - --replicas={{ coredns_replicas }}
+  when:
+    - inventory_hostname == (groups['k3s_cluster'] | first)
+    - (coredns_current_replicas.stdout | int) != (coredns_replicas | int)
+  become: true
+
+- name: Enforce strict PodAntiAffinity for CoreDNS
+  ansible.builtin.command:
+    cmd: >-
+      /usr/local/bin/k3s kubectl patch deployment coredns -n kube-system -p '{"spec":{"template":{"spec":{"affinity":{"podAntiAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":[{"labelSelector":{"matchExpressions":[{"key":"k8s-app","operator":"In","values":["kube-dns"]}]},"topologyKey":"kubernetes.io/hostname"}],"preferredDuringSchedulingIgnoredDuringExecution":null}}}}}}'
+  when:
+    - inventory_hostname == (groups['k3s_cluster'] | first)
+  changed_when: false
+  become: true
+
+# Post-deploy verification (ensure auto-deploy resources actually rolled out)
+- name: Verify Traefik DaemonSet is rolled out
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/k3s
+      - kubectl
+      - rollout
+      - status
+      - daemonset/traefik
+      - -n
+      - kube-system
+      - --timeout=60s
+  changed_when: false
+  register: verify_traefik
+  retries: 20
+  delay: 5
+  until: verify_traefik.rc == 0
+  when: inventory_hostname == (groups['k3s_cluster'] | first)
+  become: true
+
+- name: Verify MetalLB controller is rolled out
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/k3s
+      - kubectl
+      - rollout
+      - status
+      - deployment/controller
+      - -n
+      - metallb-system
+      - --timeout=60s
+  changed_when: false
+  register: verify_metallb
+  retries: 20
+  delay: 5
+  until: verify_metallb.rc == 0
+  when: inventory_hostname == (groups['k3s_cluster'] | first)
+  become: true
+
+# Kubeconfig for ansible_user
+- name: Check if k3s kubeconfig exists on node
+  ansible.builtin.stat:
+    path: /etc/rancher/k3s/k3s.yaml
+  register: k3s_kubeconfig
+  become: true
+
+- name: Create .kube directory for ansible_user
+  ansible.builtin.file:
+    path: "~{{ ansible_user }}/.kube"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0750'
+  when: k3s_kubeconfig.stat.exists
+
+- name: Copy k3s kubeconfig to ansible_user profile
+  ansible.builtin.copy:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: "~{{ ansible_user }}/.kube/config"
+    remote_src: true
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0600'
+  when: k3s_kubeconfig.stat.exists
+  become: true

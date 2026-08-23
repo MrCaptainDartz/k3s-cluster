@@ -1,0 +1,141 @@
+---
+# Prefer IPv4 in glibc resolver (blackholed IPv6 delays get_url by 40s)
+- name: Prefer IPv4 in glibc resolver (node IPv6 egress is blackholed)
+  ansible.builtin.copy:
+    dest: /etc/gai.conf
+    content: |
+      # Managed by ansible-k3s. Python urllib (Ansible get_url/uri, k3s downloads)
+      # prefers IPv6 by default; this network's IPv6 egress is blackholed, so prefer IPv4.
+      precedence ::ffff:0:0/96 100
+    mode: "0644"
+    owner: root
+    group: root
+  become: true
+
+# Auto-detect kube-vip interface based on node_cidr unless explicitly set in all.yml.
+- name: Auto-resolve the kube-vip interface from the VIP subnet
+  ansible.builtin.set_fact:
+    k3s_vip_interface: "{{ item.device }}"
+  loop: >-
+    {{
+      ansible_facts.interfaces
+      | map('extract', ansible_facts)
+      | selectattr('ipv4', 'defined')
+      | selectattr('ipv4.network', 'defined')
+      | list
+    }}
+  when:
+    - k3s_vip_interface | length == 0
+    # Compare network prefixes to avoid ipaddr filter (requires netaddr lib)
+    - item.ipv4.network == (node_cidr | split('/') | first)
+
+- name: Fail if the kube-vip interface could not be resolved
+  ansible.builtin.fail:
+    msg: >-
+      Could not find a node interface whose subnet contains the kube-vip
+      network (node_cidr={{ node_cidr }}, k3s_vip={{ k3s_vip }}). Set
+      k3s_vip_interface explicitly in inventory/group_vars/all.yml.
+  when: k3s_vip_interface | length == 0
+
+# Seed ArgoCD with this repo's root-app (11) only when gitops_root_app_enabled.
+- name: Append the root-app manifest (11-root-app) when gitops_root_app_enabled
+  ansible.builtin.set_fact:
+    k3s_server_manifests_templates: >-
+      {{
+        k3s_server_manifests_templates
+        + (gitops_root_app_enabled | bool | ternary(['11-root-app.yml.j2'], []))
+      }}
+
+# Persistent journald: make K3s logs persistent (/var/log/journal) for Alloy to tail.
+- name: Create journald drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Ensure persistent journald config (Alloy tails /var/log/journal)
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/10-persistent.conf
+    content: |
+      [Journal]
+      Storage=persistent
+      SystemMaxUse=500M
+    mode: "0644"
+  become: true
+  register: journald_conf
+
+- name: Restart journald + flush runtime -> persistent
+  ansible.builtin.shell: systemctl restart systemd-journald && journalctl --flush
+  become: true
+  changed_when: false
+  when: journald_conf.changed | default(false)
+
+# kube-apiserver audit logging: deploy policy before k3s restarts.
+- name: Ensure audit directories (policy + log) on control planes
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ audit_policy_path | dirname }}"
+    - "{{ audit_log_path | dirname }}"
+  become: true
+  when:
+    - audit_enabled | bool
+    - k3s_control_node | bool
+
+- name: Deploy kube-apiserver audit policy on control planes
+  ansible.builtin.copy:
+    dest: "{{ audit_policy_path }}"
+    content: |
+      apiVersion: audit.k8s.io/v1
+      kind: Policy
+      omitStages:
+        - RequestReceived
+      rules:
+        - level: None
+          users: ["system:apiserver", "system:kube-scheduler", "system:kube-controller-manager"]
+          verbs: ["get", "list", "watch"]
+        - level: None
+          userGroups: ["system:nodes"]
+          verbs: ["get", "list", "watch"]
+        - level: None
+          userGroups: ["system:nodes"]
+          verbs: ["update", "patch"]
+          resources:
+            - group: ""
+              resources: ["pods", "pods/status", "nodes", "nodes/status"]
+        - level: None
+          resources:
+            - group: "coordination.k8s.io"
+              resources: ["leases"]
+        - level: None
+          resources:
+            - group: "authorization.k8s.io"
+              resources: ["subjectaccessreviews", "tokenreviews"]
+            - group: "authentication.k8s.io"
+              resources: ["tokenreviews"]
+        - level: None
+          resources:
+            - group: "events.k8s.io"
+              resources: ["events"]
+            - group: ""
+              resources: ["events"]
+        - level: Metadata
+          resources:
+            - group: ""
+              resources: ["secrets"]
+          verbs: ["get", "list", "watch"]
+        - level: Metadata
+          verbs: ["create", "update", "patch", "delete", "deletecollection"]
+        - level: Metadata
+          resources:
+            - group: ""
+              resources: ["pods/exec", "pods/attach", "pods/portforward"]
+        - level: None
+    mode: "0644"
+  become: true
+  when:
+    - audit_enabled | bool
+    - k3s_control_node | bool
