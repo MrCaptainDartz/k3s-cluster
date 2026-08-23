@@ -22,4 +22,13 @@ openbao_secret_threshold: 1
 openbao_auto_unseal: true
 openbao_unseal_keys: []
 
+# Initial Bootstrap Provisioning (Executed ONLY on first-time uninitialized bootstrap)
+openbao_bootstrap_provisioning: true
 
+openbao_admin_username: "{{ forgejo_admin_username | default('admin') }}"
+openbao_admin_password: "" # Auto-generated random 24-char password if left blank
+openbao_pki_domain: "infra-services.local"
+openbao_pki_role_name: "{{ openbao_pki_domain | replace('.', '-') }}"
+openbao_pki_root_ttl: "175200h" # 20 years
+openbao_pki_cert_ttl: "2160h"   # 90 days (short-lived with automated rotation)
+traefik_cert_renew_threshold_seconds: 2592000 # Renew when < 30 days remaining

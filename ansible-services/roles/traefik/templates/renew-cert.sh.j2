@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# ============================================================
+# Automated TLS Certificate Renewer for Traefik via OpenBao PKI
+# ============================================================
+set -euo pipefail
+
+SERVICE_DIR="/home/{{ service_user_name }}/traefik"
+CERT_FILE="${SERVICE_DIR}/certs/tls.crt"
+KEY_FILE="${SERVICE_DIR}/certs/tls.key"
+APPROLE_FILE="${SERVICE_DIR}/.openbao_approle"
+OPENBAO_URL="http://127.0.0.1:{{ openbao_port | default(8200) }}"
+RENEW_THRESHOLD_SECONDS="${RENEW_THRESHOLD_SECONDS:-{{ traefik_cert_renew_threshold_seconds | default(2592000) }}}"
+
+
+mkdir -p "${SERVICE_DIR}/certs"
+
+# Check if current certificate exists and remains valid beyond threshold
+if [ -f "$CERT_FILE" ] && [ -s "$CERT_FILE" ]; then
+    if openssl x509 -checkend "$RENEW_THRESHOLD_SECONDS" -noout -in "$CERT_FILE" >/dev/null 2>&1; then
+        EXPIRY=$(openssl x509 -enddate -noout -in "$CERT_FILE" | cut -d= -f2-)
+        echo "[INFO] Traefik TLS Certificate is valid until: $EXPIRY"
+        echo "[INFO] More than $(( RENEW_THRESHOLD_SECONDS / 86400 )) days remaining. Skipping renewal."
+        exit 0
+    else
+        echo "[WARN] Traefik TLS Certificate expires in less than $(( RENEW_THRESHOLD_SECONDS / 86400 )) days. Renewing now..."
+    fi
+else
+    echo "[INFO] Traefik TLS Certificate not found. Issuing new certificate..."
+fi
+
+if [ ! -f "$APPROLE_FILE" ]; then
+    echo "[ERROR] OpenBao AppRole credentials file not found: $APPROLE_FILE" >&2
+    exit 1
+fi
+
+ROLE_ID=$(grep '^ROLE_ID=' "$APPROLE_FILE" | head -n 1 | cut -d= -f2- | tr -d '"
+ ')
+SECRET_ID=$(grep '^SECRET_ID=' "$APPROLE_FILE" | head -n 1 | cut -d= -f2- | tr -d '"
+ ')
+
+if [ -z "$ROLE_ID" ] || [ -z "$SECRET_ID" ]; then
+    echo "[ERROR] Incomplete AppRole credentials in $APPROLE_FILE" >&2
+    exit 1
+fi
+
+echo "[INFO] Authenticating to OpenBao PKI via AppRole..."
+LOGIN_PAYLOAD=$(printf '{"role_id":"%s","secret_id":"%s"}' "$ROLE_ID" "$SECRET_ID")
+LOGIN_RESP=$(curl -s -f -X POST "${OPENBAO_URL}/v1/auth/approle/login"     -H "Content-Type: application/json"     -d "$LOGIN_PAYLOAD")
+
+CLIENT_TOKEN=$(echo "$LOGIN_RESP" | jq -r '.auth.client_token // empty')
+if [ -z "$CLIENT_TOKEN" ]; then
+    echo "[ERROR] Failed to authenticate to OpenBao." >&2
+    exit 1
+fi
+
+echo "[INFO] Requesting server certificate from OpenBao PKI..."
+ISSUE_PAYLOAD=$(cat <<PAYLOAD
+{
+  "common_name": "*.{{ openbao_pki_domain | default('infra-services.local') }}",
+  "alt_names": "{{ [openbao_pki_domain | default('infra-services.local'), traefik_forgejo_domain | default('git.' + (openbao_pki_domain | default('infra-services.local'))), traefik_openbao_domain | default('openbao.' + (openbao_pki_domain | default('infra-services.local'))), 'localhost'] | unique | join(',') }}",
+  "ip_sans": "{{ ansible_host if (ansible_host | regex_search('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')) else '127.0.0.1' }}",
+  "ttl": "{{ openbao_pki_cert_ttl | default('2160h') }}"
+}
+PAYLOAD
+)
+
+ISSUE_RESP=$(curl -s -f -X POST "${OPENBAO_URL}/v1/pki/issue/{{ openbao_pki_role_name | default((openbao_pki_domain | default('infra-services.local')) | replace('.', '-')) }}" \
+    -H "X-Vault-Token: $CLIENT_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$ISSUE_PAYLOAD")
+
+
+CERT=$(echo "$ISSUE_RESP" | jq -r '.data.certificate // empty')
+CA=$(echo "$ISSUE_RESP" | jq -r '.data.issuing_ca // empty')
+KEY=$(echo "$ISSUE_RESP" | jq -r '.data.private_key // empty')
+
+if [ -z "$CERT" ] || [ -z "$KEY" ]; then
+    echo "[ERROR] Invalid response from OpenBao PKI." >&2
+    exit 1
+fi
+
+# Atomic write
+TMP_CERT="${CERT_FILE}.tmp.$$"
+TMP_KEY="${KEY_FILE}.tmp.$$"
+
+printf "%s
+%s
+" "$CERT" "$CA" > "$TMP_CERT"
+printf "%s
+" "$KEY" > "$TMP_KEY"
+
+chmod 0644 "$TMP_CERT"
+chmod 0600 "$TMP_KEY"
+
+mv -f "$TMP_CERT" "$CERT_FILE"
+mv -f "$TMP_KEY" "$KEY_FILE"
+
+echo "[SUCCESS] Certificate and private key renewed successfully."
+
+# Restart Traefik service or container to reload renewed certificate
+if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet traefik.service 2>/dev/null; then
+    echo "[INFO] Restarting Traefik via systemctl user session..."
+    systemctl --user restart traefik.service
+    echo "[SUCCESS] Traefik service restarted successfully."
+elif command -v podman >/dev/null 2>&1; then
+    echo "[INFO] Restarting Traefik container via rootless Podman..."
+    podman restart traefik || true
+    echo "[SUCCESS] Traefik container restarted successfully."
+fi
+

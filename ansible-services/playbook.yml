@@ -49,7 +49,8 @@
           - " Forgejo HTTPS   : https://{{ traefik_forgejo_domain }}"
           - " Forgejo Git SSH : ssh://git@{{ traefik_forgejo_domain }}:{{ forgejo_ssh_port | default(2222) }}"
           - " OpenBao HTTPS   : https://{{ traefik_openbao_domain }}"
-          - " Reverse Proxy   : Traefik v3 (TLS Self-Signed 30-year, Ports 80/443)"
+          - " Reverse Proxy   : Traefik v3 (TLS PKI 90-day Auto-Renew, Ports 80/443)"
           - " Service User    : {{ service_user_name }} (Rootless Podman, No Sudo)"
           - " Credentials     : Saved to ansible-services/output/ (Forgejo & OpenBao)"
           - "=========================================================="
+

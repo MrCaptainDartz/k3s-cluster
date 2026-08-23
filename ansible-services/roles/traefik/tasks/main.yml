@@ -18,6 +18,56 @@
     - "/home/{{ service_user_name }}/.config/systemd"
     - "/home/{{ service_user_name }}/.config/systemd/user"
 
+- name: Get service user UID
+  ansible.builtin.command:
+    cmd: "id -u {{ service_user_name }}"
+  register: traefik_service_uid
+  changed_when: false
+
+- name: Check if OpenBao AppRole credentials exist for Traefik certificate auto-renewal
+  ansible.builtin.stat:
+    path: "/home/{{ service_user_name }}/traefik/.openbao_approle"
+  register: traefik_openbao_approle_stat
+
+- name: Deploy Traefik automated certificate renewal script (renew-cert.sh)
+  ansible.builtin.template:
+    src: renew-cert.sh.j2
+    dest: "/home/{{ service_user_name }}/traefik/renew-cert.sh"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0750'
+  when: traefik_openbao_approle_stat.stat.exists
+
+- name: Execute certificate renewal script to ensure valid certificate is present
+  ansible.builtin.command:
+    cmd: "/home/{{ service_user_name }}/traefik/renew-cert.sh"
+  become: true
+  become_user: "{{ service_user_name }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ traefik_service_uid.stdout }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ traefik_service_uid.stdout }}/bus"
+  register: initial_cert_renew_exec
+  changed_when: "'SUCCESS: Certificate and private key renewed successfully' in initial_cert_renew_exec.stdout"
+  when: traefik_openbao_approle_stat.stat.exists
+
+- name: Deploy Traefik certificate renewer systemd user service unit
+  ansible.builtin.template:
+    src: traefik-cert-renewer.service.j2
+    dest: "/home/{{ service_user_name }}/.config/systemd/user/traefik-cert-renewer.service"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0644'
+  when: traefik_openbao_approle_stat.stat.exists
+
+- name: Deploy Traefik certificate renewer systemd user timer unit
+  ansible.builtin.template:
+    src: traefik-cert-renewer.timer.j2
+    dest: "/home/{{ service_user_name }}/.config/systemd/user/traefik-cert-renewer.timer"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0644'
+  when: traefik_openbao_approle_stat.stat.exists
+
 - name: Check if existing TLS certificate exists
   ansible.builtin.stat:
     path: "/home/{{ service_user_name }}/traefik/certs/tls.crt"
@@ -39,23 +89,26 @@
   failed_when: false
   when: traefik_cert_stat.stat.exists
 
-- name: Generate self-signed ECDSA (P-384) TLS certificate (30 years validity) with SAN
+- name: Generate self-signed ECDSA (P-384) TLS certificate fallback (when OpenBao PKI is not used)
   ansible.builtin.command:
     cmd: >-
       openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:secp384r1 -nodes
-      -days {{ traefik_cert_validity_days | default(10950) }}
+      -days {{ traefik_selfsigned_fallback_days | default(10950) }}
       -keyout /home/{{ service_user_name }}/traefik/certs/tls.key
       -out /home/{{ service_user_name }}/traefik/certs/tls.crt
+
       -subj "/CN={{ traefik_forgejo_domain }}/O=Homelab/OU=Infrastructure"
-      -addext "subjectAltName=DNS:{{ traefik_forgejo_domain }},DNS:{{ traefik_openbao_domain }},DNS:localhost,IP:{{ ansible_host }},IP:127.0.0.1"
+      -addext "subjectAltName=DNS:{{ traefik_forgejo_domain }},DNS:{{ traefik_openbao_domain }},DNS:localhost,IP:127.0.0.1{% if ansible_host | regex_search('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$') %},IP:{{ ansible_host }}{% endif %}"
   become: true
   become_user: "{{ service_user_name }}"
   notify: Restart Traefik service
   when: >
-    (not traefik_cert_stat.stat.exists) or
-    (existing_cert_info.stdout is defined and 'id-ecPublicKey' not in existing_cert_info.stdout) or
-    (existing_cert_san.stdout is defined and ('DNS:' + traefik_forgejo_domain) not in existing_cert_san.stdout) or
-    (existing_cert_san.stdout is defined and ('DNS:' + traefik_openbao_domain) not in existing_cert_san.stdout)
+    (not traefik_openbao_approle_stat.stat.exists) and (
+      (not traefik_cert_stat.stat.exists) or
+      (existing_cert_info.stdout is defined and 'id-ecPublicKey' not in existing_cert_info.stdout) or
+      (existing_cert_san.stdout is defined and ('DNS:' + traefik_forgejo_domain) not in existing_cert_san.stdout) or
+      (existing_cert_san.stdout is defined and ('DNS:' + traefik_openbao_domain) not in existing_cert_san.stdout)
+    )
 
 - name: Ensure correct permissions on TLS certificate and private key
   ansible.builtin.file:
@@ -103,12 +156,6 @@
     mode: '0644'
   notify: Restart Traefik service
 
-- name: Get service user UID
-  ansible.builtin.command:
-    cmd: "id -u {{ service_user_name }}"
-  register: traefik_service_uid
-  changed_when: false
-
 - name: Reload systemd user daemon for service user
   ansible.builtin.systemd_service:
     daemon_reload: true
@@ -118,6 +165,20 @@
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ traefik_service_uid.stdout }}"
     DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ traefik_service_uid.stdout }}/bus"
+
+
+- name: Enable and start Traefik certificate renewer timer for service user
+  ansible.builtin.systemd_service:
+    name: traefik-cert-renewer.timer
+    scope: user
+    state: started
+    enabled: true
+  become: true
+  become_user: "{{ service_user_name }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ traefik_service_uid.stdout }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ traefik_service_uid.stdout }}/bus"
+  when: traefik_openbao_approle_stat.stat.exists
 
 - name: Enable and start Traefik service for service user
   ansible.builtin.systemd_service:

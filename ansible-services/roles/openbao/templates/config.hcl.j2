@@ -29,8 +29,16 @@ cluster_addr = "http://openbao:{{ openbao_cluster_port }}"
 
 
 
-# Logging Configuration
+# Logging & Audit Configuration
 log_level = "{{ openbao_log_level }}"
+
+# Declarative JSON File Audit Device
+audit "file" "file" {
+  description = "Persistent JSON File Audit Device"
+  options = {
+    file_path = "/bao/logs/audit.log"
+  }
+}
 
 # Leases TTL defaults (32 days)
 default_lease_ttl = "768h"

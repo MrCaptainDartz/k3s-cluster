@@ -26,9 +26,10 @@ traefik_enabled: true
 traefik_version: "v3"
 traefik_http_port: 8000
 traefik_https_port: 8443
-traefik_cert_validity_days: 10950 # 30 years
+traefik_selfsigned_fallback_days: 10950 # 30 years fallback (OpenBao PKI uses 90-day certificates with automated renewal)
 traefik_forgejo_domain: "git.example.com"
 traefik_openbao_domain: "openbao.example.com"
+
 
 forgejo_enabled: true
 forgejo_version: "16.0.3"
@@ -52,13 +53,31 @@ openbao_cluster_port: 8201
 openbao_ui: true
 openbao_log_level: "info"
 
-# OpenBao Automated Bootstrap (Auto-Initialization & Auto-Unseal)
-# On first boot, OpenBao is automatically initialized and unsealed.
-# Credentials (Root Token & Unseal Keys) are saved locally to output/openbao-credentials.txt.
+# OpenBao Automated Bootstrap & Initial Provisioning
+# On first boot ONLY (if OpenBao is uninitialized):
+# - OpenBao is automatically initialized and unsealed
+# - Declarative JSON audit device is activated (/bao/logs/audit.log)
+# - KV v2 engine is mounted on secret/
+# - Policies created: admin-policy, eso-k3s-policy, ansible-policy, traefik-cert-renewer-policy
+# - Nominative admin user created with auto-generated password
+# - AppRoles enabled: 'ansible' and 'traefik-cert-renewer'
+# - Internal PKI enabled, Root CA generated, and wildcard TLS cert (90 days) issued for Traefik
+# - Automated daily certificate renewal timer deployed (renews when < 30 days remaining)
+# - All credentials saved locally to output/openbao-credentials.txt & output/openbao-ca.crt
+
 openbao_auto_init: true
 openbao_secret_shares: 1
 openbao_secret_threshold: 1
 openbao_auto_unseal: true
 openbao_unseal_keys: [] # Optional manual override keys if already existing
+
+openbao_bootstrap_provisioning: true
+openbao_admin_username: "admin"
+openbao_admin_password: "" # If empty, a strong 24-character random password is generated
+openbao_pki_domain: "example.com"
+openbao_pki_root_ttl: "175200h" # 20 years
+openbao_pki_cert_ttl: "2160h"   # 3 months (90 days)
+traefik_cert_renew_threshold_seconds: 2592000 # 30 days
+
 
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Check & Auto-Renewal of Traefik TLS Certificates (OpenBao PKI)
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

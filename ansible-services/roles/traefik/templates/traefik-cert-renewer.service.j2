@@ -1,0 +1,10 @@
+[Unit]
+Description=Traefik TLS Certificate Auto-Renewer (OpenBao PKI)
+After=network.target openbao.service
+Wants=openbao.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/{{ service_user_name }}/traefik/renew-cert.sh
+StandardOutput=journal
+StandardError=journal

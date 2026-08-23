@@ -17,9 +17,18 @@
     - { path: "/home/{{ service_user_name }}/.config/systemd" }
     - { path: "/home/{{ service_user_name }}/.config/systemd/user" }
 
+- name: Deploy logrotate configuration for OpenBao audit log
+  ansible.builtin.template:
+    src: logrotate-openbao.j2
+    dest: /etc/logrotate.d/openbao-audit
+    owner: root
+    group: root
+    mode: '0644'
+
 - name: Deploy OpenBao configuration (config.hcl)
   ansible.builtin.template:
     src: config.hcl.j2
+
     dest: "{{ openbao_dir }}/config/config.hcl"
     owner: "{{ service_user_name }}"
     group: "{{ service_user_name }}"
@@ -152,50 +161,6 @@
         else ''
       }}
 
-- name: Ensure local output directory exists on Ansible controller
-  ansible.builtin.file:
-    path: "{{ playbook_dir }}/output"
-    state: directory
-    mode: '0700'
-  delegate_to: localhost
-  become: false
-  when:
-    - openbao_init_res is not skipped
-    - openbao_init_res.json is defined
-    - "'root_token' in openbao_init_res.json"
-
-- name: Save OpenBao credentials to local output file
-  ansible.builtin.copy:
-    dest: "{{ playbook_dir }}/output/openbao-credentials.txt"
-    mode: '0600'
-    content: |
-      ============================================================
-      OpenBao Initial Administrator & Unseal Credentials
-      Generated on : {{ ansible_facts['date_time']['iso8601'] | default(ansible_date_time.iso8601) }}
-      ============================================================
-      URL               : https://{{ traefik_openbao_domain }}
-      Initial Root Token: {{ effective_root_token }}
-
-      Secret Shares     : {{ openbao_secret_shares }}
-      Secret Threshold  : {{ openbao_secret_threshold }}
-
-      Unseal Keys:
-      {% for key in effective_unseal_keys %}
-        - Key {{ loop.index }}: {{ key }}
-      {% endfor %}
-
-      ============================================================
-      NOTE: Keep these keys in a safe place (e.g. Password Manager).
-      The unseal key has also been placed in {{ openbao_dir }}/.unseal_keys
-      for automatic unsealing upon service restart.
-      ============================================================
-  delegate_to: localhost
-  become: false
-  when:
-    - openbao_init_res is not skipped
-    - openbao_init_res.json is defined
-    - "'root_token' in openbao_init_res.json"
-
 - name: Deploy OpenBao unseal keys file (.unseal_keys)
   ansible.builtin.template:
     src: unseal_keys.j2
@@ -215,5 +180,550 @@
   when:
     - (openbao_auto_unseal | default(true) | bool)
 
+# ============================================================
+# OpenBao Initial Provisioning (Executed ONLY on fresh init)
+# ============================================================
+
+- name: Generate random OpenBao admin password if not provided
+  ansible.builtin.command:
+    cmd: "openssl rand -base64 24"
+  register: generated_openbao_admin_password
+  changed_when: false
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+    - (openbao_admin_password | default('')) | length == 0
+
+- name: Resolve effective OpenBao admin password
+  ansible.builtin.set_fact:
+    effective_openbao_admin_password: >-
+      {{
+        openbao_admin_password
+        if (openbao_admin_password | default('')) | length > 0
+        else generated_openbao_admin_password.stdout
+      }}
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Enable OpenBao KV version 2 secrets engine on secret/
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/mounts/secret"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      type: "kv-v2"
+      description: "Primary Key-Value Version 2 Secrets Storage"
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Create OpenBao admin policy (admin-policy)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/policies/acl/admin-policy"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      policy: |
+        path "sys/auth/*" { capabilities = ["create", "read", "update", "delete", "sudo", "list"] }
+        path "sys/mounts/*" { capabilities = ["create", "read", "update", "delete", "sudo", "list"] }
+        path "sys/policies/*" { capabilities = ["create", "read", "update", "delete", "sudo", "list"] }
+        path "sys/policy" { capabilities = ["read", "list"] }
+        path "secret/*" { capabilities = ["create", "read", "update", "delete", "list"] }
+        path "identity/*" { capabilities = ["create", "read", "update", "delete", "list"] }
+        path "sys/audit/*" { capabilities = ["create", "read", "update", "delete", "sudo", "list"] }
+        path "sys/health" { capabilities = ["read"] }
+        path "sys/capabilities-self" { capabilities = ["update"] }
+        path "pki/*" { capabilities = ["create", "read", "update", "delete", "list"] }
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Create OpenBao External Secrets Operator policy (eso-k3s-policy)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/policies/acl/eso-k3s-policy"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      policy: |
+        path "secret/data/k3s/*" { capabilities = ["read"] }
+        path "secret/metadata/k3s/*" { capabilities = ["read", "list"] }
+        path "secret/data/apps/*" { capabilities = ["read"] }
+        path "secret/metadata/apps/*" { capabilities = ["read", "list"] }
+        path "secret/data/infra/*" { capabilities = ["read"] }
+        path "secret/metadata/infra/*" { capabilities = ["read", "list"] }
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Create OpenBao Ansible automation policy (ansible-policy)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/policies/acl/ansible-policy"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      policy: |
+        path "secret/data/infra/*" { capabilities = ["create", "read", "update", "delete"] }
+        path "secret/metadata/infra/*" { capabilities = ["read", "list"] }
+        path "secret/data/k3s/*" { capabilities = ["create", "read", "update", "delete"] }
+        path "secret/metadata/k3s/*" { capabilities = ["read", "list"] }
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Enable OpenBao userpass authentication method
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/auth/userpass"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      type: "userpass"
+      description: "Human Username & Password Authentication"
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Create OpenBao nominative admin user
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/auth/userpass/users/{{ openbao_admin_username }}"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      password: "{{ effective_openbao_admin_password }}"
+      token_policies: ["admin-policy", "default"]
+      token_ttl: "8h"
+      token_max_ttl: "24h"
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Enable OpenBao AppRole authentication method
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/auth/approle"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      type: "approle"
+      description: "Machine-to-Machine AppRole Authentication"
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Create OpenBao Ansible AppRole
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/auth/approle/role/ansible"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      token_policies: ["ansible-policy", "default"]
+      token_ttl: "1h"
+      token_max_ttl: "4h"
+      secret_id_num_uses: 0
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Fetch Ansible AppRole Role ID
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/auth/approle/role/ansible/role-id"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    status_code: 200
+  register: openbao_ansible_role_id
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Generate Ansible AppRole Secret ID
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/auth/approle/role/ansible/secret-id"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    status_code: 200
+  register: openbao_ansible_secret_id
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Create OpenBao Traefik certificate renewer policy (traefik-cert-renewer-policy)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/policies/acl/traefik-cert-renewer-policy"
+
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      policy: |
+        path "pki/issue/{{ openbao_pki_role_name }}" {
+          capabilities = ["create", "update"]
+        }
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - traefik_enabled | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Create OpenBao Traefik Certificate Renewer AppRole
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/auth/approle/role/traefik-cert-renewer"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      token_policies: ["traefik-cert-renewer-policy", "default"]
+      token_ttl: "1h"
+      token_max_ttl: "4h"
+      secret_id_num_uses: 0
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - traefik_enabled | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Fetch Traefik Certificate Renewer AppRole Role ID
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/auth/approle/role/traefik-cert-renewer/role-id"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    status_code: 200
+  register: openbao_traefik_role_id
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - traefik_enabled | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Generate Traefik Certificate Renewer AppRole Secret ID
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/auth/approle/role/traefik-cert-renewer/secret-id"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    status_code: 200
+  register: openbao_traefik_secret_id
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - traefik_enabled | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Ensure Traefik base directory exists for AppRole storage
+  ansible.builtin.file:
+    path: "/home/{{ service_user_name }}/traefik"
+    state: directory
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0775'
+  when:
+    - traefik_enabled | default(true) | bool
+    - openbao_traefik_role_id is not skipped
+    - openbao_traefik_role_id.json is defined
+
+- name: Deploy Traefik OpenBao AppRole credentials file (.openbao_approle)
+  ansible.builtin.copy:
+    dest: "/home/{{ service_user_name }}/traefik/.openbao_approle"
+    content: |
+      ROLE_ID="{{ openbao_traefik_role_id.json.data.role_id }}"
+      SECRET_ID="{{ openbao_traefik_secret_id.json.data.secret_id }}"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0600'
+  when:
+    - traefik_enabled | default(true) | bool
+    - openbao_traefik_role_id is not skipped
+    - openbao_traefik_role_id.json is defined
+
+- name: Enable OpenBao PKI secrets engine
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/sys/mounts/pki"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      type: "pki"
+      description: "Internal PKI and Certificate Authority"
+      config:
+        max_lease_ttl: "{{ openbao_pki_root_ttl | default('175200h') }}"
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Generate OpenBao Internal Root CA
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/pki/root/generate/internal"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      common_name: "Infra Services Internal Root CA"
+      ttl: "{{ openbao_pki_root_ttl | default('175200h') }}"
+      key_type: "ec"
+      key_bits: 384
+    status_code: 200
+  register: openbao_root_ca_res
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Configure OpenBao PKI URLs
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/pki/config/urls"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      issuing_certificates: ["http://127.0.0.1:{{ openbao_port }}/v1/pki/ca"]
+      crl_distribution_points: ["http://127.0.0.1:{{ openbao_port }}/v1/pki/crl"]
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Create OpenBao PKI issuing role for configured domain
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/pki/roles/{{ openbao_pki_role_name }}"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      allowed_domains: ["{{ openbao_pki_domain }}"]
+      allow_subdomains: true
+      allow_bare_domains: true
+      allow_glob_domains: true
+      allow_ip_sans: true
+      enforce_hostnames: false
+      max_ttl: "{{ openbao_pki_cert_ttl | default('2160h') }}"
+      key_type: "ec"
+      key_bits: 384
+    status_code: [200, 204]
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Issue wildcard server TLS certificate for Traefik from OpenBao PKI
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openbao_port }}/v1/pki/issue/{{ openbao_pki_role_name }}"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ effective_root_token }}"
+    body_format: json
+    body:
+      common_name: "*.{{ openbao_pki_domain }}"
+      alt_names: >-
+        {{
+          [openbao_pki_domain,
+           traefik_forgejo_domain | default('git.' + openbao_pki_domain),
+           traefik_openbao_domain | default('openbao.' + openbao_pki_domain),
+           'localhost'] | unique | join(',')
+        }}
+      ip_sans: "{{ ansible_host if (ansible_host | regex_search('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')) else '127.0.0.1' }}"
+      ttl: "{{ openbao_pki_cert_ttl | default('2160h') }}"
+    status_code: 200
+  register: openbao_traefik_cert_res
+  when:
+    - openbao_bootstrap_provisioning | default(true) | bool
+    - traefik_enabled | default(true) | bool
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Ensure Traefik certs directory exists
+  ansible.builtin.file:
+    path: "/home/{{ service_user_name }}/traefik/certs"
+    state: directory
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0775'
+  when:
+    - traefik_enabled | default(true) | bool
+    - openbao_traefik_cert_res is not skipped
+    - openbao_traefik_cert_res.json is defined
+
+- name: Deploy Traefik TLS full-chain certificate issued by OpenBao PKI
+  ansible.builtin.copy:
+    dest: "/home/{{ service_user_name }}/traefik/certs/tls.crt"
+    content: "{{ openbao_traefik_cert_res.json.data.certificate }}\n{{ openbao_traefik_cert_res.json.data.issuing_ca }}\n"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0644'
+  when:
+    - traefik_enabled | default(true) | bool
+    - openbao_traefik_cert_res is not skipped
+    - openbao_traefik_cert_res.json is defined
+
+- name: Deploy Traefik TLS private key issued by OpenBao PKI
+  ansible.builtin.copy:
+    dest: "/home/{{ service_user_name }}/traefik/certs/tls.key"
+    content: "{{ openbao_traefik_cert_res.json.data.private_key }}\n"
+    owner: "{{ service_user_name }}"
+    group: "{{ service_user_name }}"
+    mode: '0600'
+  when:
+    - traefik_enabled | default(true) | bool
+    - openbao_traefik_cert_res is not skipped
+    - openbao_traefik_cert_res.json is defined
 
 
+- name: Save OpenBao Root CA certificate to local controller output
+  ansible.builtin.copy:
+    dest: "{{ playbook_dir }}/output/openbao-ca.crt"
+    content: "{{ openbao_traefik_cert_res.json.data.issuing_ca }}\n"
+    mode: '0644'
+  delegate_to: localhost
+  become: false
+  when:
+    - openbao_traefik_cert_res is not skipped
+    - openbao_traefik_cert_res.json is defined
+
+- name: Ensure local output directory exists on Ansible controller
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/output"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+  when:
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
+
+- name: Save OpenBao credentials and initial provisioning summary to local output file
+  ansible.builtin.copy:
+    dest: "{{ playbook_dir }}/output/openbao-credentials.txt"
+    mode: '0600'
+    content: |
+      ============================================================
+      OpenBao Initial Bootstrap & Provisioning Credentials
+      Generated on : {{ ansible_facts['date_time']['iso8601'] }}
+      ============================================================
+      URL               : https://{{ traefik_openbao_domain }}
+      Initial Root Token: {{ effective_root_token }}
+
+      Secret Shares     : {{ openbao_secret_shares }}
+      Secret Threshold  : {{ openbao_secret_threshold }}
+
+      Unseal Keys:
+      {% for key in effective_unseal_keys %}
+        - Key {{ loop.index }}: {{ key }}
+      {% endfor %}
+
+      ------------------------------------------------------------
+      Admin Account (Userpass + MFA Ready):
+      ------------------------------------------------------------
+      Username          : {{ openbao_admin_username }}
+      Password          : {{ effective_openbao_admin_password }}
+      Policy            : admin-policy
+
+      ------------------------------------------------------------
+      Ansible Automation AppRole:
+      ------------------------------------------------------------
+      Role ID           : {{ openbao_ansible_role_id.json.data.role_id | default('N/A') }}
+      Secret ID         : {{ openbao_ansible_secret_id.json.data.secret_id | default('N/A') }}
+      Policy            : ansible-policy
+
+      ------------------------------------------------------------
+      Traefik Cert Renewer AppRole:
+      ------------------------------------------------------------
+      Role ID           : {{ openbao_traefik_role_id.json.data.role_id | default('N/A') }}
+      Secret ID         : {{ openbao_traefik_secret_id.json.data.secret_id | default('N/A') }}
+      Policy            : traefik-cert-renewer-policy
+      Credentials File  : /home/{{ service_user_name }}/traefik/.openbao_approle
+
+      ------------------------------------------------------------
+      Internal PKI & Automated Rotation:
+      ------------------------------------------------------------
+      Root CA Certificate: Saved to output/openbao-ca.crt
+      Traefik TLS Cert   : *.{{ openbao_pki_domain }} (ECDSA P-384, 90-day TTL)
+      Auto-Renewal Timer : Daily check (systemd user timer: traefik-cert-renewer)
+
+      ------------------------------------------------------------
+      Configured Secrets Engines & Policies:
+      ------------------------------------------------------------
+      - Audit Device    : /bao/logs/audit.log
+      - KV v2 Engine    : secret/
+      - AppRole Engine  : auth/approle
+      - Userpass Engine : auth/userpass
+      - PKI Engine      : pki/ (Root CA + *.{{ openbao_pki_domain }})
+      - Policies        : admin-policy, eso-k3s-policy, ansible-policy, traefik-cert-renewer-policy
+      ============================================================
+
+  delegate_to: localhost
+  become: false
+  when:
+    - openbao_init_res is not skipped
+    - openbao_init_res.json is defined
+    - "'root_token' in openbao_init_res.json"
