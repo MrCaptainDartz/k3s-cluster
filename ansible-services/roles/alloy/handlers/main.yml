@@ -1,0 +1,6 @@
+---
+# handlers for alloy
+- name: Restart Alloy service
+  ansible.builtin.systemd:
+    name: alloy
+    state: restarted

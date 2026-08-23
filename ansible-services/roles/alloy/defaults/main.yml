@@ -1,0 +1,6 @@
+---
+# defaults file for alloy
+alloy_enabled: true
+alloy_loki_url: "https://loki.example.com/loki/api/v1/push"
+alloy_log_level: "warn"
+alloy_config_file: "/etc/alloy/config.alloy"

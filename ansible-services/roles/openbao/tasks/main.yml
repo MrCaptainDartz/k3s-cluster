@@ -25,6 +25,18 @@
     group: root
     mode: '0644'
 
+- name: Check if OpenBao audit log file exists
+  ansible.builtin.stat:
+    path: "{{ openbao_dir }}/logs/audit.log"
+  register: openbao_audit_log_stat
+
+- name: Ensure correct group-readable permissions on OpenBao audit log file
+  ansible.builtin.file:
+    path: "{{ openbao_dir }}/logs/audit.log"
+    mode: '0640'
+  when: openbao_audit_log_stat.stat.exists
+
+
 - name: Deploy OpenBao configuration (config.hcl)
   ansible.builtin.template:
     src: config.hcl.j2

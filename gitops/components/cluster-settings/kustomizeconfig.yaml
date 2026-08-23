@@ -11,3 +11,5 @@ varReference:
     kind: NetworkPolicy
   - path: spec/template/spec/containers/args
     kind: Deployment
+  - path: spec/ipAllowList/sourceRange
+    kind: Middleware

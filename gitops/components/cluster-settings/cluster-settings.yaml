@@ -10,4 +10,5 @@ data:
   targetRevision: main
   cephSubnet: 10.20.3.0/24
   nodesSubnet: 10.20.4.0/24
+  servicesSubnet: 10.20.4.0/24
   domainName: captaindartz.org

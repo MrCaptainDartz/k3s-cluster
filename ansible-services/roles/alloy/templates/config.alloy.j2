@@ -1,0 +1,77 @@
+// ============================================================
+// Grafana Alloy Telemetry Configuration (config.alloy)
+// ============================================================
+
+logging {
+  level  = "{{ alloy_log_level | default('warn') }}"
+  format = "logfmt"
+}
+
+// ------------------------------------------------------------
+// 1. Systemd Journald Logs (OS, SSH, UFW, Fail2ban, Podman)
+// ------------------------------------------------------------
+discovery.relabel "journal" {
+  targets = []
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal__transport"]
+    target_label  = "transport"
+  }
+  rule {
+    target_label = "job"
+    replacement  = "systemd-journal"
+  }
+  rule {
+    target_label = "host"
+    replacement  = "{{ inventory_hostname }}"
+  }
+}
+
+loki.source.journal "system" {
+  forward_to    = [loki.write.loki.receiver]
+  relabel_rules = discovery.relabel.journal.rules
+  labels        = { host = "{{ inventory_hostname }}" }
+}
+
+// ------------------------------------------------------------
+// 2. OpenBao Audit Log Stream
+// ------------------------------------------------------------
+local.file_match "openbao_audit" {
+  path_targets = [ { __path__ = "/home/{{ service_user_name }}/openbao/logs/audit.log" } ]
+}
+
+discovery.relabel "openbao_audit" {
+  targets = local.file_match.openbao_audit.targets
+  rule {
+    target_label = "job"
+    replacement  = "openbao-audit"
+    action       = "replace"
+  }
+  rule {
+    target_label = "host"
+    replacement  = "{{ inventory_hostname }}"
+    action       = "replace"
+  }
+}
+
+loki.source.file "openbao_audit" {
+  targets    = discovery.relabel.openbao_audit.output
+  forward_to = [loki.write.loki.receiver]
+}
+
+// ------------------------------------------------------------
+// 3. Loki Remote Write Receiver (Safe Backoff / Non-blocking)
+// ------------------------------------------------------------
+loki.write "loki" {
+  endpoint {
+    url                 = "{{ alloy_loki_url }}"
+    batch_wait          = "5s"
+    batch_size          = "1MiB"
+    min_backoff_period  = "5s"
+    max_backoff_period  = "1m"
+    max_backoff_retries = 3
+  }
+}

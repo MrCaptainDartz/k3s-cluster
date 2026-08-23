@@ -37,8 +37,10 @@ audit "file" "file" {
   description = "Persistent JSON File Audit Device"
   options = {
     file_path = "/bao/logs/audit.log"
+    mode      = "0640"
   }
 }
+
 
 # Leases TTL defaults (32 days)
 default_lease_ttl = "768h"

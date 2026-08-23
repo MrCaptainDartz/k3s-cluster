@@ -35,3 +35,10 @@ vars:
       apiVersion: v1
     fieldref:
       fieldpath: data.nodesSubnet
+  - name: SERVICES_SUBNET
+    objref:
+      kind: ConfigMap
+      name: cluster-settings
+      apiVersion: v1
+    fieldref:
+      fieldpath: data.servicesSubnet

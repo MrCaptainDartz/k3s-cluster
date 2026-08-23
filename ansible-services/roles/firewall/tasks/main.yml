@@ -28,9 +28,11 @@
     rule: "{{ item.rule | default('allow') }}"
     port: "{{ item.port }}"
     proto: "{{ item.proto | default('tcp') }}"
+    from_ip: "{{ item.from_ip | default(omit) }}"
     comment: "{{ item.comment | default(omit) }}"
   loop: "{{ firewall_rules }}"
   notify: Reload UFW
+
 
 - name: Configure UFW NAT port redirection in before.rules
   ansible.builtin.blockinfile:

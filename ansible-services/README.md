@@ -4,6 +4,8 @@ Automates OS provisioning, security hardening, and Rootless Podman deployment of
 - **Traefik v3**: Rootless HTTPS reverse proxy with 90-day ECDSA P-384 certificates, automated PKI rotation, and HTTP (80) -> HTTPS (443) redirection.
 - **Forgejo**: Local Git server with auto-created admin and SSH on port 2222.
 - **OpenBao 2.6**: Open-source secret manager with Raft storage, declarative audit logging, internal PKI Root CA, AppRoles, and Web UI.
+- **Prometheus Node Exporter**: System metrics exposed on `:9100/metrics` (firewall-restricted to K3s cluster subnet).
+- **Grafana Alloy**: Telemetry collector streaming systemd journal logs and OpenBao audit logs to Loki.
 
 ---
 
@@ -22,6 +24,7 @@ Key variables to review in `inventory/group_vars/all.yml`:
 - `openbao_pki_domain`: Base domain for internal PKI wildcard certificates (default: `infra-services.local`).
 - `openbao_pki_cert_ttl`: Validity duration for issued TLS certificates (default: `2160h` / 90 days).
 - `traefik_cert_renew_threshold_seconds`: Renewal threshold in seconds (default: `2592000` / 30 days).
+- `alloy_loki_url`: Loki push endpoint URL for log shipping.
 - `forgejo_admin_username`, `forgejo_admin_email`: Initial Forgejo admin account.
 - Passwords left blank (`""`) are auto-generated on first deploy and safely preserved across re-runs.
 
@@ -40,7 +43,7 @@ ansible-playbook -i inventory/hosts.yml playbook.yml
 On first boot (when OpenBao is uninitialized), the playbook automatically:
 1. **Initializes OpenBao** with configurable Shamir secret shares/thresholds.
 2. **Deploys unseal keys** to `/home/services/openbao/.unseal_keys` (`0600`) and enables the automated systemd unseal service.
-3. **Configures the Declarative JSON Audit Device** (`/bao/logs/audit.log`) with logrotate (`/etc/logrotate.d/openbao-audit`).
+3. **Configures the Declarative JSON Audit Device** (`/bao/logs/audit.log`, mode `0640`) with logrotate (`/etc/logrotate.d/openbao-audit`).
 4. **Mounts the `kv-v2` secret engine** at `secret/`.
 5. **Creates Security Policies**: `admin-policy`, `eso-k3s-policy`, `ansible-policy`, and `traefik-cert-renewer-policy`.
 6. **Configures Authentication Methods**:
@@ -62,10 +65,9 @@ On first boot (when OpenBao is uninitialized), the playbook automatically:
 - **Forgejo HTTPS**: `https://git.infra-services.local`
 - **Forgejo Git SSH**: `ssh://git@git.infra-services.local:2222`
 - **OpenBao HTTPS**: `https://openbao.infra-services.local`
-- **Root CA Certificate**: Saved to `output/openbao-ca.crt` (import this certificate into your browser or OS trust store to trust all `*.infra-services.local` HTTPS endpoints without warnings).
+- **Node Exporter**: `http://<vm-ip>:9100/metrics`
+- **Grafana Alloy**: Streams systemd journal and OpenBao audit logs to `alloy_loki_url`.
+- **Root CA Certificate**: Saved to `output/openbao-ca.crt` (import into your browser or OS trust store to trust all `*.infra-services.local` HTTPS endpoints without warnings).
 - **Admin Credentials**: Saved automatically to `output/`:
   - `output/forgejo-credentials.txt`: Forgejo admin username & password.
   - `output/openbao-credentials.txt`: Initial Root Token, Unseal Keys, nominative admin account (with TOTP MFA secret key & setup URL for Bitwarden), Ansible AppRole (Role ID & Secret ID), Traefik AppRole, and PKI summary.
-
-
-

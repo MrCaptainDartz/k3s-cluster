@@ -1,0 +1,5 @@
+---
+# defaults file for node_exporter
+node_exporter_enabled: true
+node_exporter_package: "prometheus-node-exporter"
+node_exporter_port: 9100

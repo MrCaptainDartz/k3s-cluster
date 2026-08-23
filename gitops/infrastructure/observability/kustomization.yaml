@@ -36,6 +36,7 @@ resources:
   - grafana-admin-credentials.sops.yaml
   - monitors.yaml
   - network-policies.yaml
+  - loki-ingress.yaml
   - rules.yaml
   - snapshotter-prometheus
   - snapshotter-grafana

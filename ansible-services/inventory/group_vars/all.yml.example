@@ -17,10 +17,15 @@ firewall_rules:
   - { port: "8000", proto: "tcp", rule: "allow", comment: "Traefik Rootless HTTP" }
   - { port: "8443", proto: "tcp", rule: "allow", comment: "Traefik Rootless HTTPS" }
   - { port: "2222", proto: "tcp", rule: "allow", comment: "Forgejo Git SSH" }
+  - { port: "9100", proto: "tcp", rule: "allow", from_ip: "192.168.1.0/24", comment: "Prometheus Node Exporter (K3s Subnet)" }
+
+node_exporter_enabled: true
+
 
 container_log_driver: "json-file"
 container_log_max_size: "500m"
 container_log_max_file: "3"
+
 
 traefik_enabled: true
 traefik_version: "v3"
@@ -88,7 +93,9 @@ openbao_totp_algorithm: "SHA256"
 openbao_totp_skew: 1
 openbao_totp_max_validation_attempts: 5
 
-
-
-
-
+# ============================================================
+# Grafana Alloy Telemetry Collector (Logs shipping to Loki)
+# ============================================================
+alloy_enabled: true
+alloy_loki_url: "https://loki.example.com/loki/api/v1/push"
+alloy_log_level: "warn"

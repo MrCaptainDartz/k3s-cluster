@@ -22,6 +22,13 @@
       when: openbao_enabled | default(true)
     - role: traefik
       when: traefik_enabled | default(true)
+    - role: node_exporter
+      when: node_exporter_enabled | default(true)
+      tags: [node_exporter]
+    - role: alloy
+      when: alloy_enabled | default(true)
+      tags: [alloy]
+
 
   post_tasks:
     - name: Check if a reboot is required
@@ -49,8 +56,9 @@
           - " Forgejo HTTPS   : https://{{ traefik_forgejo_domain }}"
           - " Forgejo Git SSH : ssh://git@{{ traefik_forgejo_domain }}:{{ forgejo_ssh_port | default(2222) }}"
           - " OpenBao HTTPS   : https://{{ traefik_openbao_domain }}"
+          - " Node Exporter   : http://{{ ansible_host }}:{{ node_exporter_port | default(9100) }}/metrics"
+          - " Grafana Alloy   : Active (Streaming to {{ alloy_loki_url | default('Loki') }})"
           - " Reverse Proxy   : Traefik v3 (TLS PKI 90-day Auto-Renew, Ports 80/443)"
           - " Service User    : {{ service_user_name }} (Rootless Podman, No Sudo)"
           - " Credentials     : Saved to ansible-services/output/ (Forgejo & OpenBao)"
           - "=========================================================="
-

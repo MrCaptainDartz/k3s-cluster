@@ -1,0 +1,76 @@
+---
+- name: Ensure apt keyrings directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Download Grafana APT GPG signing key
+  ansible.builtin.get_url:
+    url: "https://apt.grafana.com/gpg.key"
+    dest: /tmp/grafana-apt.key
+    mode: '0644'
+  register: grafana_gpg_download
+
+- name: Check if Grafana GPG keyring exists
+  ansible.builtin.stat:
+    path: /etc/apt/keyrings/grafana.gpg
+  register: grafana_keyring_stat
+
+- name: Dearmor Grafana GPG key to keyrings
+  ansible.builtin.command:
+    cmd: "gpg --dearmor --yes -o /etc/apt/keyrings/grafana.gpg /tmp/grafana-apt.key"
+  when: grafana_gpg_download.changed or not grafana_keyring_stat.stat.exists
+  changed_when: false
+
+- name: Ensure correct permissions on Grafana GPG keyring
+  ansible.builtin.file:
+    path: /etc/apt/keyrings/grafana.gpg
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Clean up temporary GPG key file
+  ansible.builtin.file:
+    path: /tmp/grafana-apt.key
+    state: absent
+
+- name: Add Grafana APT repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main"
+    state: present
+    filename: grafana
+    update_cache: true
+
+- name: Install Grafana Alloy package
+  ansible.builtin.apt:
+    name: alloy
+    state: present
+
+- name: Add alloy user to system log reading groups
+  ansible.builtin.user:
+    name: alloy
+    groups:
+      - systemd-journal
+      - adm
+      - "{{ service_user_name | default('services') }}"
+    append: true
+  notify: Restart Alloy service
+
+
+- name: Deploy Grafana Alloy configuration (config.alloy)
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: "{{ alloy_config_file | default('/etc/alloy/config.alloy') }}"
+    owner: root
+    group: alloy
+    mode: '0640'
+  notify: Restart Alloy service
+
+- name: Ensure Grafana Alloy service is enabled and started
+  ansible.builtin.systemd:
+    name: alloy
+    enabled: true
+    state: started
