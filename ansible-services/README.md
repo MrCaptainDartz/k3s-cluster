@@ -62,12 +62,13 @@ On first boot (when OpenBao is uninitialized), the playbook automatically:
 
 ---
 
-## 📦 Declarative K3s Secrets Provisioning (OpenBao KV v2)
+## 📦 Declarative Secrets Provisioning (OpenBao KV v2)
 
-The `openbao` role supports declarative pre-provisioning of Kubernetes/K3s secrets into OpenBao KV v2 storage (`secret/data/k3s/...`) for consumption by External Secrets Operator (ESO):
+The `openbao` role supports declarative pre-provisioning of secrets into OpenBao KV v2 storage (`secret/data/<path>`) for consumption by External Secrets Operator (ESO) and cluster components:
 
 - **Disabled by default**: `openbao_provision_k3s_secrets: false` in role defaults ensures no secrets are created unless explicitly configured in your inventory.
 - **Configurable List (`openbao_k3s_secrets`)**: Declare paths and key/value dictionaries in `inventory/group_vars/all.yml`.
+- **Recommended Root Folders (`k3s/`, `apps/`, `infra/`)**: While any folder path under `secret/` is supported at creation time, it is strongly recommended to prefix paths with `k3s/` (e.g. `k3s/<namespace>/<secret-name>`), `apps/`, or `infra/` because default access control policies ([`eso-k3s-policy`](roles/openbao/tasks/main.yml) for External Secrets Operator and [`ansible-policy`](roles/openbao/tasks/main.yml) for automation) are pre-configured to grant access to these three hierarchies.
 - **Intelligent Auto-Generation & Preservation**:
   - Keys with explicit values (e.g. `userID: "k8s-rbd"`) are applied directly.
   - Keys left empty (`""`) are auto-generated with cryptographically secure 24-character random passwords (or numeric digits if defined in `digits_only_keys`).
@@ -79,12 +80,12 @@ Example in `inventory/group_vars/all.yml`:
 openbao_provision_k3s_secrets: true
 
 openbao_k3s_secrets:
-  - path: "ceph-csi-operator-system/csi-rbd-secret"
+  - path: "k3s/ceph-csi-operator-system/csi-rbd-secret"
     data:
       userID: "k8s-rbd"
       userKey: "" # Auto-generated 24-character random string
 
-  - path: "monitoring/alertmanager-telegram"
+  - path: "k3s/monitoring/alertmanager-telegram"
     data:
       bot-token: ""
       chat-id: ""

@@ -311,11 +311,13 @@
     body_format: json
     body:
       policy: |
-        # Manage KV v2 secrets for infra and k3s
+        # Manage KV v2 secrets for infra, k3s, and apps
         path "secret/data/infra/*" { capabilities = ["create", "read", "update", "delete"] }
         path "secret/metadata/infra/*" { capabilities = ["read", "list"] }
         path "secret/data/k3s/*" { capabilities = ["create", "read", "update", "delete"] }
         path "secret/metadata/k3s/*" { capabilities = ["read", "list"] }
+        path "secret/data/apps/*" { capabilities = ["create", "read", "update", "delete"] }
+        path "secret/metadata/apps/*" { capabilities = ["read", "list"] }
 
         # Delegated management of Kubernetes auth engine for K3s
         path "sys/auth/kubernetes" { capabilities = ["create", "read", "update", "delete", "sudo"] }

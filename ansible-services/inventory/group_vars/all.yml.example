@@ -94,42 +94,43 @@ openbao_totp_skew: 1
 openbao_totp_max_validation_attempts: 5
 
 # ============================================================
-# K3s Pre-provisioned Secrets (OpenBao KV v2 on secret/data/k3s/...)
+# Declarative Pre-provisioned Secrets (OpenBao KV v2 on secret/data/<path>)
 # ============================================================
 openbao_provision_k3s_secrets: true
 
-# Configurable list of K3s secrets to provision in OpenBao KV v2 (secret/data/k3s/<path>)
+# Configurable list of secrets to provision in OpenBao KV v2 (secret/data/<path>)
+# Specify the full folder path (e.g. k3s/namespace/secret-name or apps/app/secret).
 # Any key left with an empty string ("") is automatically auto-generated on deployment.
 openbao_k3s_secrets:
   # Ceph CSI Storage Credentials (userID & userKey for Ceph cluster)
-  - path: "ceph-csi-operator-system/csi-rbd-secret"
+  - path: "k3s/ceph-csi-operator-system/csi-rbd-secret"
     data:
       userID: "k8s-rbd"
       userKey: "AQB...REPLACE_WITH_CEPH_RBD_KEY..."
 
-  - path: "ceph-csi-operator-system/csi-cephfs-secret"
+  - path: "k3s/ceph-csi-operator-system/csi-cephfs-secret"
     data:
       userID: "k8s-cephfs"
       userKey: "AQB...REPLACE_WITH_CEPH_CEPHFS_KEY..."
 
   # Infomaniak DNS API Tokens (Cert-Manager ACME DNS-01 & External-DNS)
-  - path: "cert-manager/infomaniak-api-credentials"
+  - path: "k3s/cert-manager/infomaniak-api-credentials"
     data:
       api-token: "REPLACE_WITH_INFOMANIAK_API_TOKEN"
 
-  - path: "external-dns/infomaniak-api-token-cluster-domain"
+  - path: "k3s/external-dns/infomaniak-api-token-cluster-domain"
     data:
       api-token: "REPLACE_WITH_INFOMANIAK_API_TOKEN"
 
   # Observability Credentials (Alertmanager Telegram Tokens & Grafana Administrator)
-  - path: "monitoring/alertmanager-telegram"
+  - path: "k3s/monitoring/alertmanager-telegram"
     data:
       bot-token: "REPLACE_WITH_TELEGRAM_BOT_TOKEN"
       chat-id: "123456789"
     digits_only_keys:
       chat-id: 18 # Auto-generates numeric digits (length: 18) if left empty ("")
 
-  - path: "monitoring/grafana-admin-credentials"
+  - path: "k3s/monitoring/grafana-admin-credentials"
     data:
       admin-user: "admin"
       admin-password: "" # If empty, a strong 24-character random password is generated automatically
