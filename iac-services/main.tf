@@ -126,6 +126,10 @@ resource "proxmox_virtual_environment_vm" "infra_services" {
     type = var.vm_vga_type
   }
 
+  rng {
+    source = "/dev/urandom"
+  }
+
   operating_system {
     type = "l26" # Linux 2.6 / 5.x / 6.x kernel
   }
