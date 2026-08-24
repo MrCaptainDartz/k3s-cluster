@@ -205,6 +205,7 @@
             status_code: 200
           register: openbao_login
           delegate_to: localhost
+          become: false
           run_once: true
           when: inventory_hostname == (groups['k3s_cluster'] | first)
     
@@ -219,6 +220,7 @@
             status_code: 200
           register: openbao_auth_methods
           delegate_to: localhost
+          become: false
           run_once: true
           when: inventory_hostname == (groups['k3s_cluster'] | first)
     
@@ -235,11 +237,11 @@
               description: "Kubernetes auth for K3s cluster"
             status_code: [200, 204]
           delegate_to: localhost
+          become: false
           run_once: true
           when:
             - inventory_hostname == (groups['k3s_cluster'] | first)
-            - "'kubernetes/' not in (openbao_auth_methods.json.data | default(openbao_auth_methods.
-  json))"
+            - "'kubernetes/' not in (openbao_auth_methods.json.data | default(openbao_auth_methods.json))"
     
         - name: Configure Kubernetes auth engine in OpenBao
           ansible.builtin.uri:
@@ -255,6 +257,7 @@
               token_reviewer_jwt: "{{ reviewer_token_b64.stdout | b64decode }}"
             status_code: [200, 204]
           delegate_to: localhost
+          become: false
           run_once: true
           when: inventory_hostname == (groups['k3s_cluster'] | first)
     
@@ -274,6 +277,7 @@
               token_ttl: "1h"
             status_code: [200, 204]
           delegate_to: localhost
+          become: false
           run_once: true
           when: inventory_hostname == (groups['k3s_cluster'] | first)
   ──────

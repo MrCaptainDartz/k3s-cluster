@@ -1,6 +1,6 @@
 # ClusterSecretStore for OpenBao (infra-services VM).
 # Authenticates via short-lived ServiceAccount JWT (auth/kubernetes).
-# caBundle is the public OpenBao root CA certificate.
+# CA certificate is provided in plain ASCII/PEM via the openbao-ca ConfigMap.
 apiVersion: external-secrets.io/v1
 kind: ClusterSecretStore
 metadata:
@@ -11,25 +11,17 @@ spec:
       server: "https://openbao.infra-services.local:443"
       path: "secret"
       version: "v2"
-      caBundle: |
-        -----BEGIN CERTIFICATE-----
-        MIIB9TCCAXygAwIBAgIUP1AI0ciIdYKVdoS47oYanw4yH90wCgYIKoZIzj0EAwMw
-        KjEoMCYGA1UEAxMfSW5mcmEgU2VydmljZXMgSW50ZXJuYWwgUm9vdCBDQTAeFw0y
-        NjA4MjMxNzU2MjBaFw00NjA4MTgxNzU2NTBaMCoxKDAmBgNVBAMTH0luZnJhIFNl
-        cnZpY2VzIEludGVybmFsIFJvb3QgQ0EwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAAS5
-        sfkjQNUWYmbCS8zdY6E+q4QdtzdEHQfd++YSs/gjiLLUJ5FKfL1gJ65gSceUMQOw
-        p9v507xalssssxEopUb1vFOfURtX8MLRh1XcPsw+f4ZpelRN4CyZ5Sz5EYolNuij
-        YzBhMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBSn
-        LrOw9Fzv7HcRnu8GTZKAMw+gLzAfBgNVHSMEGDAWgBSnLrOw9Fzv7HcRnu8GTZKA
-        Mw+gLzAKBggqhkjOPQQDAwNnADBkAjAQnWb45K1KAIzPpw0krtX4BikQuMPT4Bi+
-        A3zoqqFXgdqa3G+tsgNphywAQoeBePcCMBeL6Bq9wsSzK2+K2eUZM8+J0H7yEnxP
-        f0sTQUdoPEE9k/1t87Bkg0d31zz3xoVGAw==
-        -----END CERTIFICATE-----
+      caProvider:
+        type: ConfigMap
+        name: openbao-ca
+        namespace: external-secrets
+        key: ca.crt
       auth:
         kubernetes:
           mountPath: "kubernetes"
           role: "eso-k3s"
           serviceAccountRef:
             name: "external-secrets"
+            namespace: "external-secrets"
             audiences:
               - "https://kubernetes.default.svc.cluster.local"

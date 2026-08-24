@@ -15,5 +15,6 @@ helmCharts:
     valuesFile: values.yaml
 
 resources:
+  - openbao-ca.yaml
   - cluster-store.yaml
   - network-policies.yaml
