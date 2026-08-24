@@ -18,7 +18,7 @@ cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
 ```
 
 Key variables to review in `inventory/group_vars/all.yml`:
-- `ansible_host`: Static IP of the VM (default: `10.20.4.253`).
+- `ansible_host`: Static IP of the VM (placeholder in `hosts.yml.example`, set yours).
 - `traefik_forgejo_domain`: Domain for Forgejo (default: `git.infra-services.local`).
 - `traefik_openbao_domain`: Domain for OpenBao (default: `openbao.infra-services.local`).
 - `openbao_pki_domain`: Base domain for internal PKI wildcard certificates (default: `infra-services.local`).
