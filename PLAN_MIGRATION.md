@@ -431,6 +431,10 @@
                 group_interval: 5m
                 repeat_interval: 4h
                 receiver: telegram
+                routes:
+                  - receiver: "null"
+                    matchers:
+                      - alertname =~ "Watchdog|InfoInhibitor"
               receivers:
                 - name: "null"
                 - name: telegram
