@@ -117,11 +117,6 @@ metadata:
   name: allow-ingress-prometheus
   namespace: external-secrets
 spec:
-  # The chart ships 3 Deployments with per-component pods: the controller
-  # (name=external-secrets) plus cert-controller and webhook (name=
-  # external-secrets-<component>). All three serve metrics on :8080
-  # (--metrics-addr=:8080), so the selector must cover all components —
-  # otherwise Prometheus gets TargetDown on the two satellite pods.
   podSelector:
     matchExpressions:
       - key: app.kubernetes.io/name
