@@ -2,12 +2,9 @@
 # handlers file for traefik
 
 - name: Restart Traefik service
-  ansible.builtin.systemd_service:
-    name: traefik.service
-    scope: user
-    state: restarted
+  ansible.builtin.shell: |
+    XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user restart traefik.service
   become: true
   become_user: "{{ service_user_name }}"
-  environment:
-    XDG_RUNTIME_DIR: "/run/user/{{ traefik_service_uid.stdout }}"
-    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ traefik_service_uid.stdout }}/bus"
+  changed_when: true
+  when: traefik_enabled | default(true) | bool

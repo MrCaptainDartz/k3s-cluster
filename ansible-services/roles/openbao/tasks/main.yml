@@ -772,6 +772,7 @@
     owner: "{{ service_user_name }}"
     group: "{{ service_user_name }}"
     mode: '0644'
+  notify: Restart Traefik service
   when:
     - traefik_enabled | default(true) | bool
     - openbao_traefik_cert_res is not skipped
@@ -784,6 +785,7 @@
     owner: "{{ service_user_name }}"
     group: "{{ service_user_name }}"
     mode: '0600'
+  notify: Restart Traefik service
   when:
     - traefik_enabled | default(true) | bool
     - openbao_traefik_cert_res is not skipped
