@@ -35,7 +35,7 @@ kubeProxy:
 prometheus:
   prometheusSpec:
     retention: 15d
-    retentionSize: 34Gi
+    retentionSize: 34GiB
     scrapeInterval: 30s
     # nil selectors => discover all ServiceMonitors/PodMonitors/PrometheusRules across
     # namespaces (the monitors in monitors.yaml + KPS defaults + the node-exporter chart).
