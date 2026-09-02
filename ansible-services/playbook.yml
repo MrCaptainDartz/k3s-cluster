@@ -29,7 +29,6 @@
       when: alloy_enabled | default(true)
       tags: [alloy]
 
-
   post_tasks:
     - name: Check if a reboot is required
       ansible.builtin.stat:
