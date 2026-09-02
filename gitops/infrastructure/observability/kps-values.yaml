@@ -35,6 +35,7 @@ kubeProxy:
 prometheus:
   prometheusSpec:
     retention: 15d
+    retentionSize: 34Gi
     scrapeInterval: 30s
     # nil selectors => discover all ServiceMonitors/PodMonitors/PrometheusRules across
     # namespaces (the monitors in monitors.yaml + KPS defaults + the node-exporter chart).
@@ -48,7 +49,7 @@ prometheus:
           accessModes: ["ReadWriteOnce"]
           resources:
             requests:
-              storage: 20Gi
+              storage: 40Gi
 
 # Alertmanager config loaded from ExternalSecret `alertmanager-config`
 # (mounted via useExistingSecret so credentials stay out of plaintext values).
