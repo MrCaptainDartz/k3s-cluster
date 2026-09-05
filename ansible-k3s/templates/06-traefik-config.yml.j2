@@ -43,6 +43,9 @@ spec:
     service:
       annotations:
         metallb.io/loadBalancerIPs: "{{ traefik_lb_ip }}"
+      # Preserves the real client source IP (no SNAT to the receiving node IP).
+      spec:
+        externalTrafficPolicy: Local
     # Access logs — forensics only (errors + slow requests), NOT full traffic.
     # Traefik filters are OR-connected (keepAccessLog in pkg/middlewares/accesslog/logger.go): a request
     # is logged if its status code is in `statuscodes` OR its duration exceeds `minduration`. Normal 2xx/3xx

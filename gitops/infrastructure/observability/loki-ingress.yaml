@@ -6,8 +6,8 @@ metadata:
 spec:
   ipAllowList:
     sourceRange:
-      - "$(SERVICES_SUBNET)"  # Dedicated infra-services VM subnet
-      - "$(NODES_SUBNET)"     # K3s cluster nodes subnet
+      - "$(SERVICES_SUBNET)" # Dedicated infra-services VM subnet
+      - "$(NODES_SUBNET)" # K3s cluster nodes subnet
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -34,4 +34,3 @@ spec:
     - hosts:
         - loki.$(DOMAIN_NAME)
       secretName: loki-tls
-

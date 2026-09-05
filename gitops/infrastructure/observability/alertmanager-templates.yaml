@@ -4,8 +4,15 @@
 # (which would also conflict with External-Secrets' own templating engine).
 # With parse_mode HTML (Alertmanager's default for Telegram) the template is
 # executed with html/template: values are escaped automatically, only literal
-# tags (<b>, <i>, <code>, <a>) pass through. A rendered message over 4096
-# runes is DISCARDED (not truncated), hence the 6-alert cap below.
+# tags (<b>, <i>, <code>, <a>) pass through.
+# Telegram DISCARDS HTML messages over 4096 runes, so the template tracks its
+# own accumulated size and degrades gracefully: full alert cards while under
+# ACC_FULL (3400), then one line listing the remaining alerts by name (pod /
+# instance / node, else fingerprint) while under ACC_NAMES (3950), then just a
+# count. Sizes are accumulated as padded strings via printf "%*s" (no
+# arithmetic funcs exist in Alertmanager). len() counts bytes (>= runes for
+# non-ASCII) and text truncations bound each alert, so the rendered message
+# stays below the Telegram limit.
 # $(DOMAIN_NAME) is substituted at kustomize build time (varReference in the
 # cluster-settings component).
 apiVersion: v1
@@ -16,35 +23,31 @@ metadata:
 type: Opaque
 stringData:
   telegram.tmpl: |
-    {{ define "telegram.default.message" -}}
+    {{ define "telegram.default.message" -}}{{- $acc := "" -}}{{- $skip := "" -}}{{- $names := "" -}}
     {{- if gt (len .Alerts.Firing) 0 -}}
     🚨 {{ len .Alerts.Firing }} firing alert(s)
-    {{ template "telegram.alerts" .Alerts.Firing }}
-    {{- end -}}
-    {{- if gt (len .Alerts.Resolved) 0 -}}
-    ✅ {{ len .Alerts.Resolved }} resolved alert(s)
-    {{ template "telegram.alerts" .Alerts.Resolved }}
-    {{- end -}}
-    🛠 <a href="https://grafana.$(DOMAIN_NAME)">Grafana</a>
-    {{- end }}
-
-    {{ define "telegram.alerts" -}}
-    {{- range $i, $a := . -}}
-    {{- if lt $i 6 }}
+    {{ range $a := .Alerts.Firing }}{{- $b := printf "%*s%*s%*s%*s" (len $a.Labels.alertname) "" (len $a.Annotations.summary) "" (len $a.Annotations.description) "" 150 "" }}{{- range $a.Labels.SortedPairs }}{{- $b = printf "%s%*s%*s" $b (len .Name) "" (len .Value) "" }}{{- end }}{{- if lt (len (printf "%s%s" $acc $b)) 3400 }}{{- $acc = printf "%s%s" $acc $b }}
     {{ template "telegram.alert" $a }}
-    {{ end }}
-    {{- end -}}
-    {{- if gt (len .) 6 -}}
-    … {{ len . }} alerts in total, only the first 6 are shown
-    {{- end -}}
+    {{- else }}{{- $skip = printf "%s0" $skip }}{{- if lt (len $acc) 3950 }}{{- $n := printf "%.40s" $a.Labels.pod }}{{- if eq $n "" }}{{- $n = printf "%.40s" ($a.Labels.instance | reReplaceAll ":\\d+$" "") }}{{ end }}{{- if eq $n "" }}{{- $n = printf "%.40s" $a.Labels.node }}{{ end }}{{- if eq $n "" }}{{- $n = printf "%.8s" $a.Fingerprint }}{{ end }}{{- $names = printf "%s %s" $names $n }}{{- $acc = printf "%s%*s" $acc (len $n) "" }}{{ end }}{{ end }}{{ end }}
+    {{- end }}{{- if gt (len .Alerts.Resolved) 0 }}
+    ✅ {{ len .Alerts.Resolved }} resolved alert(s)
+    {{ range $a := .Alerts.Resolved }}{{- $b := printf "%*s%*s%*s%*s" (len $a.Labels.alertname) "" (len $a.Annotations.summary) "" (len $a.Annotations.description) "" 150 "" }}{{- range $a.Labels.SortedPairs }}{{- $b = printf "%s%*s%*s" $b (len .Name) "" (len .Value) "" }}{{- end }}{{- if lt (len (printf "%s%s" $acc $b)) 3400 }}{{- $acc = printf "%s%s" $acc $b }}
+    {{ template "telegram.alert" $a }}
+    {{- else }}{{- $skip = printf "%s0" $skip }}{{- if lt (len $acc) 3950 }}{{- $n := printf "%.40s" $a.Labels.pod }}{{- if eq $n "" }}{{- $n = printf "%.40s" ($a.Labels.instance | reReplaceAll ":\\d+$" "") }}{{ end }}{{- if eq $n "" }}{{- $n = printf "%.40s" $a.Labels.node }}{{ end }}{{- if eq $n "" }}{{- $n = printf "%.8s" $a.Fingerprint }}{{ end }}{{- $names = printf "%s %s" $names $n }}{{- $acc = printf "%s%*s" $acc (len $n) "" }}{{ end }}{{ end }}{{ end }}
+    {{- end }}{{- if gt (len $skip) 0 }}
+    … {{ len $skip }} more alert(s){{ if gt (len $names) 0 }}:{{ printf "%.350s" $names }}{{ if gt (len $names) 350 }}…{{ end }}{{ end }} (full list in Prometheus)
+    {{- end }}
+    🛠 <a href="https://grafana.$(DOMAIN_NAME)">Grafana</a>
+    🛠 <a href="https://prometheus.$(DOMAIN_NAME)">Prometheus</a>
+    🛠 <a href="https://alertmanager.$(DOMAIN_NAME)">AlertManager</a>
     {{- end }}
 
     {{ define "telegram.alert" -}}
     {{- if eq .Status "resolved" -}}✅{{- else if eq .Labels.severity "critical" -}}🚨{{- else -}}⚠️{{- end }}
-    <b>{{ .Labels.alertname }}</b>
+    <b>{{ printf "%.60s" .Labels.alertname }}</b>
     {{- if and (ne .Status "resolved") .Labels.severity }} ({{ .Labels.severity }}){{ end }}
     {{- with .Annotations.summary }}
-    <em>{{ printf "%.140s" . }}</em>
+    <em>{{ printf "%.120s" . }}</em>
     {{- end }}
     {{- with .Annotations.description }}
     {{ printf "%.150s" . }}
@@ -52,13 +55,13 @@ stringData:
     {{- range .Labels.SortedPairs }}
     {{- if or (eq .Name "alertname") (eq .Name "severity") (eq .Name "prometheus") (eq .Name "node") (eq .Name "instance") (eq .Value "") -}}
     {{- else }}
-    <i>{{ .Name }}</i>=<code>{{ .Value }}</code>
+    <i>{{ .Name }}</i>=<code>{{ printf "%.80s" .Value }}</code>
     {{- end }}
     {{- end }}
     {{- if .Labels.node }}
-    🖥 <code>{{ .Labels.node }}</code>
+    🖥 <code>{{ printf "%.80s" .Labels.node }}</code>
     {{- else if .Labels.instance }}
-    🖥 <code>{{ .Labels.instance | reReplaceAll ":\\d+$" "" }}</code>
+    🖥 <code>{{ printf "%.80s" (.Labels.instance | reReplaceAll ":\\d+$" "") }}</code>
     {{- end }}
     {{- if .Annotations.runbook_url }}
     🔗 <a href="{{ .Annotations.runbook_url }}">Runbook</a>

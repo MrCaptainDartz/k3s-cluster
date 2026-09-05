@@ -56,4 +56,18 @@ vars:
       apiVersion: v1
     fieldref:
       fieldpath: data.domainName
+  - name: LAN_SUBNET_A
+    objref:
+      kind: ConfigMap
+      name: cluster-settings
+      apiVersion: v1
+    fieldref:
+      fieldpath: data.lanSubnetA
+  - name: LAN_SUBNET_B
+    objref:
+      kind: ConfigMap
+      name: cluster-settings
+      apiVersion: v1
+    fieldref:
+      fieldpath: data.lanSubnetB
 

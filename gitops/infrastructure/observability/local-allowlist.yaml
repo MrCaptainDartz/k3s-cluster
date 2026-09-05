@@ -1,0 +1,14 @@
+# Restricts the monitoring UIs (Grafana / Prometheus / Alertmanager) to the
+# user LAN(s). Requires traefik's LoadBalancer Service with
+# externalTrafficPolicy: Local (ansible-k3s/templates/06-traefik-config.yml.j2)
+# so traefik sees real client IPs instead of SNAT'd node IPs.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: local-allowlist
+  namespace: monitoring
+spec:
+  ipAllowList:
+    sourceRange:
+      - "$(LAN_SUBNET_A)"
+      - "$(LAN_SUBNET_B)"

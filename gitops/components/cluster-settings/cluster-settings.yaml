@@ -14,3 +14,7 @@ data:
   # K3s pod CIDR (--cluster-cidr), defined in ansible-k3s inventory/group_vars/all.yml (cluster_cidr).
   podsSubnet: 10.42.0.0/16
   domainName: captaindartz.org
+  # User LAN(s) — monitoring UIs (Grafana / Prometheus / Alertmanager) are
+  # restricted to these via the traefik "local-allowlist" middleware.
+  lanSubnetA: 10.20.1.0/24
+  lanSubnetB: 10.20.90.0/24

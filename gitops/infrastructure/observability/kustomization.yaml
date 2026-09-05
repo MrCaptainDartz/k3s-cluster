@@ -37,6 +37,7 @@ resources:
   - grafana-admin-externalsecret.yaml
   - monitors.yaml
   - network-policies.yaml
+  - local-allowlist.yaml
   - loki-ingress.yaml
   - rules.yaml
   - snapshotter-prometheus
