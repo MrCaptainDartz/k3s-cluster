@@ -103,12 +103,7 @@ variable "vm_bios" {
 variable "vm_vga_type" {
   type        = string
   description = "VGA display type (e.g., 'std' for Default, 'qxl' for SPICE, 'serial0', 'vmware')"
-  default     = "qxl"
-
-  validation {
-    condition     = contains(["std", "qxl", "serial0", "vmware", "cirrus", "none"], var.vm_vga_type)
-    error_message = "vm_vga_type must be a valid Proxmox display type (std, qxl, serial0, vmware, cirrus, none)."
-  }
+  default     = "virtio"
 }
 
 variable "vm_machine_type" {

@@ -156,7 +156,7 @@ variable "vm_bios" {
 variable "vm_vga_type" {
   type        = string
   description = "VGA display type"
-  default     = "qxl"
+  default     = "virtio"
 }
 
 variable "vm_keyboard_layout" {
