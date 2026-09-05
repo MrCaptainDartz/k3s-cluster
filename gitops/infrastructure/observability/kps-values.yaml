@@ -53,10 +53,14 @@ prometheus:
 
 # Alertmanager config loaded from ExternalSecret `alertmanager-config`
 # (mounted via useExistingSecret so credentials stay out of plaintext values).
+# Telegram message template is mounted from the plaintext
+# `alertmanager-templates` Secret (not sensitive, no OpenBao roundtrip).
 alertmanager:
   alertmanagerSpec:
     useExistingSecret: true
     configSecret: alertmanager-config
+    secrets:
+      - alertmanager-templates
 
 grafana:
   admin:

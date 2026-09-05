@@ -33,6 +33,7 @@ helmCharts:
 
 resources:
   - alertmanager-externalsecret.yaml
+  - alertmanager-templates.yaml
   - grafana-admin-externalsecret.yaml
   - monitors.yaml
   - network-policies.yaml

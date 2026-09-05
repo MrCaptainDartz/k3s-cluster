@@ -1,0 +1,66 @@
+# Override of Alertmanager's built-in "telegram.default.message" template.
+# User templates are parsed AFTER the built-in defaults, so this define simply
+# replaces the default one — no need to set `message:` on telegram_configs
+# (which would also conflict with External-Secrets' own templating engine).
+# With parse_mode HTML (Alertmanager's default for Telegram) the template is
+# executed with html/template: values are escaped automatically, only literal
+# tags (<b>, <i>, <code>, <a>) pass through. A rendered message over 4096
+# runes is DISCARDED (not truncated), hence the 6-alert cap below.
+# $(DOMAIN_NAME) is substituted at kustomize build time (varReference in the
+# cluster-settings component).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-templates
+  namespace: monitoring
+type: Opaque
+stringData:
+  telegram.tmpl: |
+    {{ define "telegram.default.message" -}}
+    {{- if gt (len .Alerts.Firing) 0 -}}
+    🚨 {{ len .Alerts.Firing }} firing alert(s)
+    {{ template "telegram.alerts" .Alerts.Firing }}
+    {{- end -}}
+    {{- if gt (len .Alerts.Resolved) 0 -}}
+    ✅ {{ len .Alerts.Resolved }} resolved alert(s)
+    {{ template "telegram.alerts" .Alerts.Resolved }}
+    {{- end -}}
+    🛠 <a href="https://grafana.$(DOMAIN_NAME)">Grafana</a>
+    {{- end }}
+
+    {{ define "telegram.alerts" -}}
+    {{- range $i, $a := . -}}
+    {{- if lt $i 6 }}
+    {{ template "telegram.alert" $a }}
+    {{ end }}
+    {{- end -}}
+    {{- if gt (len .) 6 -}}
+    … {{ len . }} alerts in total, only the first 6 are shown
+    {{- end -}}
+    {{- end }}
+
+    {{ define "telegram.alert" -}}
+    {{- if eq .Status "resolved" -}}✅{{- else if eq .Labels.severity "critical" -}}🚨{{- else -}}⚠️{{- end }}
+    <b>{{ .Labels.alertname }}</b>
+    {{- if and (ne .Status "resolved") .Labels.severity }} ({{ .Labels.severity }}){{ end }}
+    {{- with .Annotations.summary }}
+    <em>{{ printf "%.140s" . }}</em>
+    {{- end }}
+    {{- with .Annotations.description }}
+    {{ printf "%.150s" . }}
+    {{- end }}
+    {{- range .Labels.SortedPairs }}
+    {{- if or (eq .Name "alertname") (eq .Name "severity") (eq .Name "prometheus") (eq .Name "node") (eq .Name "instance") (eq .Value "") -}}
+    {{- else }}
+    <i>{{ .Name }}</i>=<code>{{ .Value }}</code>
+    {{- end }}
+    {{- end }}
+    {{- if .Labels.node }}
+    🖥 <code>{{ .Labels.node }}</code>
+    {{- else if .Labels.instance }}
+    🖥 <code>{{ .Labels.instance | reReplaceAll ":\\d+$" "" }}</code>
+    {{- end }}
+    {{- if .Annotations.runbook_url }}
+    🔗 <a href="{{ .Annotations.runbook_url }}">Runbook</a>
+    {{ end }}
+    {{- end }}

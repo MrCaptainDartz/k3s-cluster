@@ -21,3 +21,5 @@ varReference:
     kind: ClusterIssuer
   - path: spec/acme/solvers/selector/dnsZones
     kind: ClusterIssuer
+  - path: stringData/telegram.tmpl
+    kind: Secret
