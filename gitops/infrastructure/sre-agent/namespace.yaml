@@ -1,0 +1,5 @@
+# No PSA labels: the repo only labels namespaces that run pods, and this one never will.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sre-agent

@@ -7,3 +7,5 @@
     - role: xanmanning.k3s
     - role: cluster_post
     - role: openbao_registration
+    - role: sre_kubeconfig
+      tags: [sre-kubeconfig]

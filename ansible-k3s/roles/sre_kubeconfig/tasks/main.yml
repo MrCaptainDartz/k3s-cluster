@@ -1,0 +1,158 @@
+---
+# Extracts the k8s_broker ServiceAccount's kubeconfig into ansible-k3s/output/ (gitignored, 0600).
+# The account is GitOps-owned, so this waits for ArgoCD and never fails a play that has done its job.
+- name: Wait for the token controller to populate the Secret
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/k3s
+      - kubectl
+      - get
+      - secret
+      - "{{ sre_kubeconfig_serviceaccount }}-token"
+      - -n
+      - "{{ sre_kubeconfig_namespace }}"
+      - -o
+      - "jsonpath={.data.token}"
+  # The Secret merely existing is not enough: ArgoCD creates it empty and the token controller fills
+  # data.token asynchronously, so polling on the return code alone would read an empty token.
+  until: sre_token_b64.stdout | default('') | length > 0
+  retries: "{{ sre_kubeconfig_retries }}"
+  delay: "{{ sre_kubeconfig_delay }}"
+  changed_when: false
+  failed_when: false
+  no_log: true
+  register: sre_token_b64
+  when:
+    - sre_kubeconfig_enabled | bool
+    - inventory_hostname == (groups['k3s_cluster'] | first)
+  become: true
+
+- name: Warn that the account is not there yet
+  ansible.builtin.debug:
+    msg: >-
+      {{ sre_kubeconfig_namespace }}/{{ sre_kubeconfig_serviceaccount }}-token is absent or still
+      empty, so no kubeconfig was written. This is expected until the sre-agent commit is pushed and
+      root-app has synced — the cluster itself is fine. Re-run just this step with:
+      ansible-playbook -i inventory/hosts.yml playbook.yml --tags sre-kubeconfig
+  when:
+    - sre_kubeconfig_enabled | bool
+    - inventory_hostname == (groups['k3s_cluster'] | first)
+    - sre_token_b64.stdout | default('') | length == 0
+
+- name: Read the cluster CA (stays base64 — it goes into certificate-authority-data)
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/k3s
+      - kubectl
+      - get
+      - secret
+      - "{{ sre_kubeconfig_serviceaccount }}-token"
+      - -n
+      - "{{ sre_kubeconfig_namespace }}"
+      - -o
+      - 'jsonpath={.data.ca\.crt}'
+  changed_when: false
+  register: sre_ca_b64
+  when:
+    - sre_kubeconfig_enabled | bool
+    - inventory_hostname == (groups['k3s_cluster'] | first)
+    - sre_token_b64.stdout | default('') | length > 0
+  become: true
+
+# Guards against writing a credential nobody can use: better a loud failure than a silent one.
+- name: Assert both halves came back
+  ansible.builtin.assert:
+    that:
+      - sre_token_b64.stdout | default('') | length > 0
+      - sre_ca_b64.stdout | default('') | length > 0
+    fail_msg: "Token or CA came back empty — refusing to write a broken kubeconfig."
+  when:
+    - sre_kubeconfig_enabled | bool
+    - inventory_hostname == (groups['k3s_cluster'] | first)
+    - sre_token_b64.stdout | default('') | length > 0
+
+# Written straight to the control machine: no token is ever left lying on a cluster node.
+- name: Ensure the local output directory exists
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/output"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  when:
+    - sre_kubeconfig_enabled | bool
+    - inventory_hostname == (groups['k3s_cluster'] | first)
+    - sre_token_b64.stdout | default('') | length > 0
+
+- name: Write the kubeconfig
+  ansible.builtin.copy:
+    dest: "{{ playbook_dir }}/output/{{ sre_kubeconfig_filename }}"
+    mode: "0600"
+    content: |
+      apiVersion: v1
+      kind: Config
+      clusters:
+        - name: {{ sre_kubeconfig_cluster_name }}
+          cluster:
+            server: {{ sre_kubeconfig_api_server }}
+            certificate-authority-data: {{ sre_ca_b64.stdout }}
+      users:
+        - name: {{ sre_kubeconfig_serviceaccount }}
+          user:
+            token: {{ sre_token_b64.stdout | b64decode }}
+      contexts:
+        - name: {{ sre_kubeconfig_serviceaccount }}
+          context:
+            cluster: {{ sre_kubeconfig_cluster_name }}
+            user: {{ sre_kubeconfig_serviceaccount }}
+            namespace: {{ sre_kubeconfig_namespace }}
+      current-context: {{ sre_kubeconfig_serviceaccount }}
+  # no_log or --diff prints the whole file, token included, into the console and any CI log.
+  no_log: true
+  delegate_to: localhost
+  become: false
+  when:
+    - sre_kubeconfig_enabled | bool
+    - inventory_hostname == (groups['k3s_cluster'] | first)
+    - sre_token_b64.stdout | default('') | length > 0
+
+- name: Record what the account is allowed to do
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/k3s
+      - kubectl
+      - auth
+      - can-i
+      - --list
+      - "--as=system:serviceaccount:{{ sre_kubeconfig_namespace }}:{{ sre_kubeconfig_serviceaccount }}"
+  changed_when: false
+  register: sre_can_i
+  when:
+    - sre_kubeconfig_enabled | bool
+    - inventory_hostname == (groups['k3s_cluster'] | first)
+    - sre_token_b64.stdout | default('') | length > 0
+  become: true
+
+- name: Write that list next to the kubeconfig
+  ansible.builtin.copy:
+    dest: "{{ playbook_dir }}/output/{{ sre_kubeconfig_serviceaccount }}-can-i.txt"
+    mode: "0644"
+    content: "{{ sre_can_i.stdout }}\n"
+  delegate_to: localhost
+  become: false
+  when:
+    - sre_kubeconfig_enabled | bool
+    - inventory_hostname == (groups['k3s_cluster'] | first)
+    - sre_token_b64.stdout | default('') | length > 0
+
+- name: Report where things landed
+  ansible.builtin.debug:
+    msg: >-
+      Kubeconfig written to {{ playbook_dir }}/output/{{ sre_kubeconfig_filename }} (server
+      {{ sre_kubeconfig_api_server }}). It authenticates as a non-expiring token ArgoCD owns: if that
+      Secret is ever recreated the token changes and this file must be re-extracted and handed over
+      again.
+  when:
+    - sre_kubeconfig_enabled | bool
+    - inventory_hostname == (groups['k3s_cluster'] | first)
+    - sre_token_b64.stdout | default('') | length > 0

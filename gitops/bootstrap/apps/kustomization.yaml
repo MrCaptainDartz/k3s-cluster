@@ -13,3 +13,4 @@ resources:
   - nfs-csi.yaml
   - observability.yaml
   - smb-csi.yaml
+  - sre-agent.yaml

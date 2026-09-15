@@ -1,0 +1,119 @@
+# Cluster-side half of the k8s_broker role: nothing here is write-capable — no secrets, no
+# exec/attach/portforward, no impersonate, no non-resource URL. Rationale: gitops/README.md.
+---
+# Explicit rather than the built-in 'view': the aggregate's contents move between releases.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sre-readonly
+rules:
+  # PVs as well as PVCs, plus quotas/limits/ServiceAccounts: what explains an unschedulable pod.
+  - apiGroups: [""]
+    resources:
+      - pods
+      - services
+      - endpoints
+      - configmaps
+      - nodes
+      - namespaces
+      - events
+      - persistentvolumeclaims
+      - persistentvolumes
+      - resourcequotas
+      - limitranges
+      - serviceaccounts
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: ["apps", "batch", "networking.k8s.io", "apiextensions.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  # What an SRE agent reads next: endpointslices, autoscalers, PDBs, storage classes, leases.
+  - apiGroups:
+      - discovery.k8s.io
+      - autoscaling
+      - policy
+      - storage.k8s.io
+      - coordination.k8s.io
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  # RuntimeClass, PriorityClass, events.k8s.io, API priority levels, APIService health.
+  # rbac.* answers "why Forbidden?" — it reveals who MAY read a secret, never a secret.
+  - apiGroups:
+      - node.k8s.io
+      - scheduling.k8s.io
+      - events.k8s.io
+      - flowcontrol.apiserver.k8s.io
+      - apiregistration.k8s.io
+      - rbac.authorization.k8s.io
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  # Paths in an external store and store status conditions — what names a stalled sync.
+  # Escape hatch: a store's provider config can inline credentials (vault.headers, fake.data).
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets", "secretstores", "clustersecretstores"]
+    verbs: ["get", "list", "watch"]
+  # Escape hatch: middlewares.spec.headers.customRequestHeaders is a free-form header map.
+  - apiGroups: ["traefik.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  # Escape hatch: spec.apiserverConfig.bearerToken — its own schema warns "the token value
+  # appears in clear-text" — plus the remoteWrite[].headers / oauth2.endpointParams maps.
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  # Escape hatch: certificates.spec.keystores.*.password takes a literal password. Kept because a
+  # Certificate is the best object for diagnosing issuance; drop `certificates` for a strict grant.
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificaterequests", "certificates", "clusterissuers", "issuers"]
+    verbs: ["get", "list", "watch"]
+  # Orders/Challenges: where a stalled issuance shows. Their status token is the public ACME one.
+  - apiGroups: ["acme.cert-manager.io"]
+    resources: ["orders", "challenges"]
+    verbs: ["get", "list", "watch"]
+  # Escape hatch: volumesnapshotclasses.spec.parameters is a free-form driver parameter map.
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots", "volumesnapshotcontents", "volumesnapshotclasses"]
+    verbs: ["get", "list", "watch"]
+  # The only place showing the Traefik add-on's applied values (06-traefik-config.yml.j2).
+  # Escape hatch, and the field in use: spec.valuesContent is a free-form Helm values blob.
+  - apiGroups: ["helm.cattle.io"]
+    resources: ["helmcharts", "helmchartconfigs"]
+    verbs: ["get", "list", "watch"]
+  # addons = add-on status; etcdsnapshotfiles = snapshot inventory (backup supervision).
+  - apiGroups: ["k3s.cattle.io"]
+    resources: ["addons", "etcdsnapshotfiles"]
+    verbs: ["get", "list", "watch"]
+  # Pool and advertisement explain an EXTERNAL-IP stuck at <pending>; the statuses name the
+  # announcing node. bgppeers is deliberately absent — spec.password is a TCP-MD5 credential.
+  - apiGroups: ["metallb.io"]
+    resources: ["ipaddresspools", "l2advertisements", "servicel2statuses", "configurationstates"]
+    verbs: ["get", "list", "watch"]
+  # Credentials live in the native Secret csi-rbd-secret, which this role does not grant.
+  - apiGroups: ["csi.ceph.io"]
+    resources: ["drivers", "cephconnections", "clientprofiles", "clientprofilemappings", "operatorconfigs"]
+    verbs: ["get", "list", "watch"]
+  # Escape hatch: helm.values / helm.valuesObject / parameters[].map carry inline Helm values.
+  # valuesObject takes precedence over values. This repo keeps values in versioned files.
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications", "appprojects"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list"]
+  # Deliberately NOT granted — read gitops/README.md before re-adding: hub.traefik.io,
+  # generators.external-secrets.io, metallb.io/bgppeers.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sre-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sre-readonly
+subjects:
+  - kind: ServiceAccount
+    name: sre-readonly
+    namespace: sre-agent

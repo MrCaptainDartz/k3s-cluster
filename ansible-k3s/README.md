@@ -27,6 +27,7 @@ ansible-k3s/
 │   ├── node_prep/                       # Pre-install (IPv4 pref, VIP interface, journald, audit policy)
 │   ├── cluster_post/                    # Post-install (CoreDNS tuning, rollout checks, kubeconfig)
 │   ├── openbao_registration/            # OpenBao auto-registration via AppRole (auth/kubernetes)
+│   ├── sre_kubeconfig/                  # Extracts the read-only agent kubeconfig into output/
 │   └── xanmanning.k3s/                  # K3s installation role (from Galaxy)
 └── templates/
     ├── 01-kube-vip-rbac.yml.j2

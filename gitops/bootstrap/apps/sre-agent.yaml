@@ -1,0 +1,36 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sre-agent
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-9"
+spec:
+  project: default
+  source:
+    repoURL: $(REPO_URL)
+    path: gitops/infrastructure/sre-agent
+    targetRevision: $(TARGET_REVISION)
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: sre-agent
+  # data.token / data.ca.crt are written by the token controller, not by this manifest: ignore the
+  # whole map, or ArgoCD reports the Secret OutOfSync forever.
+  ignoreDifferences:
+    - group: ""
+      kind: Secret
+      name: sre-readonly-token
+      jsonPointers:
+        - /data
+  # ArgoCD creates the Namespace from namespace.yaml — the CreateNamespace option is only for
+  # namespaces declared nowhere. No ServerSideApply: it fights the token controller's writes.
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 10
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

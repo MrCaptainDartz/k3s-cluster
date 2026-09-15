@@ -160,3 +160,7 @@ k3s_server_manifests_templates:
   - 08-vault-reviewer.yml.j2
   - 09-argocd.yml.j2
   - 10-coredns-pdb.yml.j2
+
+# sre-readonly kubeconfig (roles/sre_kubeconfig). Uncomment to change the endpoint the agent dials:
+# sre_kubeconfig_enabled: true
+# sre_kubeconfig_api_server: "https://{{ k3s_vip }}:{{ k3s_api_port }}"

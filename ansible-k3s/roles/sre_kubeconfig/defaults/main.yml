@@ -1,0 +1,18 @@
+---
+# Defaults for the sre-readonly kubeconfig extraction. The account is GitOps-owned
+# (gitops/infrastructure/sre-agent/), so this only succeeds once ArgoCD has synced it.
+sre_kubeconfig_enabled: true
+
+sre_kubeconfig_namespace: "sre-agent"
+sre_kubeconfig_serviceaccount: "sre-readonly"
+sre_kubeconfig_cluster_name: "broker"
+sre_kubeconfig_filename: "sre-readonly.kubeconfig"
+
+# API endpoint in the kubeconfig — must be reachable FROM THE AGENT's host, not just from the
+# cluster. Override it if that network cannot route to the VIP.
+sre_kubeconfig_api_server: "https://{{ k3s_vip }}:{{ k3s_api_port }}"
+
+# Wait budget for ArgoCD to create the token Secret (retries x delay). Kept short so a re-run before
+# the account exists does not stall the play; raise it with -e sre_kubeconfig_retries=60 when needed.
+sre_kubeconfig_retries: 12
+sre_kubeconfig_delay: 5

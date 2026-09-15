@@ -18,7 +18,7 @@ gitops/
 │   └── apps/                                    # App-of-apps: one Application per add-on (rendered by Kustomize)
 └── infrastructure/                              # The actual manifests of each add-on
     ├── ceph-csi/  cert-manager/  external-dns/  external-secrets/  external-snapshotter/
-    └── kured/  nfs-csi/  observability/  smb-csi/
+    └── kured/  nfs-csi/  observability/  smb-csi/  sre-agent/
 ```
 
 - The Ansible template `11-root-app.yml.j2` creates the **root `Application`** that points ArgoCD at
@@ -37,7 +37,7 @@ gitops/
 ### Sync order (sync-waves)
 
 ```
--10 external-secrets   →   -9 external-snapshotter   →   -8 ceph-csi / nfs-csi / smb-csi
+-10 external-secrets   →   -9 external-snapshotter / sre-agent   →   -8 ceph-csi / nfs-csi / smb-csi
    →   -7 cert-manager   →   -6 external-dns   →   -5 observability   →   -4 kured
 ```
 
@@ -146,7 +146,7 @@ The corresponding `Application` won't be created, so ArgoCD won't sync that infr
 ## Step 5 — Validate locally
 
 ```bash
-# Renders the 9 Applications + cluster-settings (no Helm needed):
+# Renders the 10 Applications + cluster-settings (no Helm needed):
 kubectl kustomize gitops/bootstrap/apps
 
 # Render a single infra app (needs Helm for the helmCharts ones):
@@ -171,3 +171,22 @@ ArgoCD synchronizes normally.
 - **ESO auth chain**: `ansible-k3s` post-tasks bind the OpenBao role `eso-k3s` to SA
   `external-secrets` (ns `external-secrets`, audience `https://kubernetes.default.svc.cluster.local`).
   Renaming the ESO ServiceAccount or namespace breaks the TokenReview login.
+- **`sre-agent` is the one native `Secret` in this layer** (`sre-readonly-token`, type
+  `kubernetes.io/service-account-token`): safe to version because the API server mints the token
+  value. The **kubeconfig** built from it must never be committed — the `sre_kubeconfig` role in
+  `ansible-k3s` writes it to `ansible-k3s/output/` (gitignored, 0600); hand it over out of band. It
+  is ArgoCD-owned with `selfHeal: true`, so deleting it recreates it with a *new* token and silently
+  invalidates the kubeconfig the agent already holds — re-issue it in `iac-ai-agent` to rotate.
+- **`sre-readonly` grant**: hand-written ClusterRole rather than the built-in `view` aggregate (whose
+  contents move between releases); groups named explicitly, never `apiGroups: ["*"]`. Audited
+  2026-09-15 against the live cluster (K3s v1.36.2) by walking every CRD's OpenAPI schema for
+  credential-named fields *and* free-form string maps. Three installed groups are deliberately
+  excluded — `hub.traefik.io` (inline JWT signing secret), `generators.external-secrets.io`
+  (generators *produce* material) and `metallb.io/bgppeers` (TCP-MD5 password) — and each granted
+  group keeping an escape hatch names it beside its rule (cert-manager `keystores.*.password`,
+  Prometheus `apiserverConfig.bearerToken`, ArgoCD `helm.valuesObject`, K3s `valuesContent`, Traefik
+  `customRequestHeaders`). None is used in this repo today; if one ever is, drop the rule instead.
+- **Adding an add-on** (Authentik, Trivy, …) means adding its group in `rbac.yaml`, or the agent sees
+  `Forbidden` — and a typo'd group fails *open* as that same `Forbidden`, since the API server never
+  validates `apiGroups`. Verify with
+  `kubectl auth can-i --list --as=system:serviceaccount:sre-agent:sre-readonly`.
