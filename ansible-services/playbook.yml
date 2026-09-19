@@ -18,6 +18,7 @@
     - podman
     - role: forgejo
       when: forgejo_enabled | default(true)
+      tags: [forgejo]
     - role: openbao
       when: openbao_enabled | default(true)
     - role: traefik

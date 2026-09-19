@@ -8,6 +8,8 @@ forgejo_ssh_port: 2222
 forgejo_db_name: "forgejo"
 forgejo_db_user: "forgejo"
 forgejo_db_password: ""
+# If left blank, a strong random SECRET_KEY is auto-generated on first deploy and preserved across re-runs
+forgejo_secret_key: ""
 forgejo_disable_registration: false
 forgejo_log_driver: "{{ container_log_driver | default('json-file') }}"
 forgejo_log_max_size: "{{ container_log_max_size | default('500m') }}"

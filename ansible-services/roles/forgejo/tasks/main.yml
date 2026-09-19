@@ -52,6 +52,36 @@
         )
       }}
 
+- name: Read existing FORGEJO_SECRET_KEY if Forgejo .env exists
+  ansible.builtin.command:
+    cmd: "grep '^FORGEJO_SECRET_KEY=' {{ forgejo_dir }}/.env"
+  register: existing_forgejo_secret_key_raw
+  changed_when: false
+  failed_when: false
+  when: forgejo_env_stat.stat.exists
+
+- name: Generate random Forgejo SECRET_KEY if not set
+  ansible.builtin.command:
+    cmd: "openssl rand -hex 32"
+  register: generated_forgejo_secret_key
+  changed_when: false
+  when:
+    - (forgejo_secret_key | default('')) | length == 0
+    - not (forgejo_env_stat.stat.exists and (existing_forgejo_secret_key_raw.stdout | default('')) | length > 0)
+
+- name: Resolve effective Forgejo SECRET_KEY
+  ansible.builtin.set_fact:
+    resolved_forgejo_secret_key: >-
+      {{
+        forgejo_secret_key
+        if (forgejo_secret_key | default('')) | length > 0
+        else (
+          (existing_forgejo_secret_key_raw.stdout | regex_replace('^FORGEJO_SECRET_KEY=', ''))
+          if (forgejo_env_stat.stat.exists and (existing_forgejo_secret_key_raw.stdout | default('')) | length > 0)
+          else generated_forgejo_secret_key.stdout
+        )
+      }}
+
 - name: Deploy Forgejo .env configuration
   ansible.builtin.template:
     src: forgejo.env.j2
