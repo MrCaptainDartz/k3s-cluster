@@ -70,4 +70,10 @@ vars:
       apiVersion: v1
     fieldref:
       fieldpath: data.lanSubnetB
-
+  - name: LAN_SUBNET_AI_SRE_AGENT
+    objref:
+      kind: ConfigMap
+      name: cluster-settings
+      apiVersion: v1
+    fieldref:
+      fieldpath: data.lanSubnetAiSreAgent

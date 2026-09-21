@@ -18,3 +18,4 @@ data:
   # restricted to these via the traefik "local-allowlist" middleware.
   lanSubnetA: 10.20.1.0/24
   lanSubnetB: 10.20.90.0/24
+  lanSubnetAiSreAgent: 10.20.53.0/24

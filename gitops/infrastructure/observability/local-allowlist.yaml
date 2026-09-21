@@ -12,3 +12,4 @@ spec:
     sourceRange:
       - "$(LAN_SUBNET_A)"
       - "$(LAN_SUBNET_B)"
+      - "$(LAN_SUBNET_AI_SRE_AGENT)"
