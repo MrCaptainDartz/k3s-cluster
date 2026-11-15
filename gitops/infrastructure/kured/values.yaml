@@ -1,5 +1,9 @@
 configuration:
-  period: 1m
+  period: "5m"
+  startTime: "04:00"
+  endTime: "05:30"
+  timeZone: "UTC"
+  lockReleaseDelay: "5m"
 rbac:
   create: true
 tolerations:
